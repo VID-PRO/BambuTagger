@@ -258,7 +258,7 @@ static const char* MENU_ITEMS[] = {
     "1 Read Tag",
     "2 Clone Tag",
     "3 Write Dump",
-    "4 GitHub Lib",
+    "4 GitHub Library",
     "5 WiFi / Web"
 };
 static const int MENU_COUNT = 5;
@@ -601,10 +601,12 @@ static void oledText(int x, int y, int sz,
 
 static void oledTitle(const char* title) {
     oled.setTextSize(1);
-    oled.setTextColor(SH110X_WHITE);
-    oled.setCursor(0, 0);
+    oled.fillRect(0, 0, 128, 10, SH110X_WHITE);
+    oled.setTextColor(SH110X_BLACK);
+    oled.setCursor(2, 1);
     oled.print(title);
-    oled.drawFastHLine(0, 9, 128, SH110X_WHITE);
+    //oled.drawFastHLine(0, 9, 128, SH110X_WHITE);
+    oled.setTextColor(SH110X_WHITE);
 }
 
 void showStatus(const char* msg) {
@@ -679,24 +681,25 @@ void drawMenu() {
 
     // WiFi indicator top-right
     oled.setTextSize(1);
-    oled.setTextColor(SH110X_WHITE);
-    oled.setCursor(96, 0);
+    oled.setTextColor(SH110X_BLACK);
+    oled.setCursor(104, 1);
     oled.print(WiFi.status() == WL_CONNECTED ? "WiFi" : "AP");
+    oled.setTextColor(SH110X_WHITE);
 
     // 3 visible items
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         int idx = menuScroll + i;
         if (idx >= MENU_COUNT) break;
-        int y = 13 + i * 17;
+        int y = 13 + i * 13;
         bool sel = (idx == menuSel);
         if (sel) {
-            oled.fillRect(0, y - 1, 128, 15, SH110X_WHITE);
+            oled.fillRect(0, y - 1, 128, 13, SH110X_WHITE);
             oled.setTextColor(SH110X_BLACK);
         } else {
             oled.setTextColor(SH110X_WHITE);
         }
         oled.setTextSize(1);
-        oled.setCursor(4, y);
+        oled.setCursor(4, y + 1);
         oled.print(MENU_ITEMS[idx]);
         oled.setTextColor(SH110X_WHITE);
     }
@@ -705,7 +708,7 @@ void drawMenu() {
     if (menuScroll > 0) {
         oled.drawTriangle(122, 12, 118, 16, 126, 16, SH110X_WHITE);
     }
-    if (menuScroll + 3 < MENU_COUNT) {
+    if (menuScroll + 4 < MENU_COUNT) {
         oled.drawTriangle(122, 63, 118, 59, 126, 59, SH110X_WHITE);
     }
 
@@ -810,9 +813,9 @@ void drawDumpSelect() {
         oled.print("to download first.");
     } else {
         int scroll = max(0, dumpSel - 1);
-        for (int i = 0; i < 3 && (scroll + i) < (int)dumpFiles.size(); i++) {
+        for (int i = 0; i < 4 && (scroll + i) < (int)dumpFiles.size(); i++) {
             int idx = scroll + i;
-            int y   = 13 + i * 17;
+            int y   = 13 + i * 13;
             bool sel = (idx == dumpSel);
             String name = dumpFiles[idx];
             // Strip leading slash
@@ -820,12 +823,12 @@ void drawDumpSelect() {
             if (name.length() > 17) name = name.substring(0, 16) + "~";
 
             if (sel) {
-                oled.fillRect(0, y - 1, 128, 15, SH110X_WHITE);
+                oled.fillRect(0, y - 1, 128, 13, SH110X_WHITE);
                 oled.setTextColor(SH110X_BLACK);
             } else {
                 oled.setTextColor(SH110X_WHITE);
             }
-            oled.setCursor(2, y);
+            oled.setCursor(2, y + 1);
             oled.print(name);
             oled.setTextColor(SH110X_WHITE);
         }
@@ -1348,6 +1351,7 @@ void apiList() {
             String type = item["type"] | "";
             String name = item["name"] | "";
             if (type == "file" && !name.endsWith(".bin")) continue;
+            if (name.startsWith(".")) continue;
             JsonObject o = arr.createNestedObject();
             o["name"] = name;
             o["path"] = item["path"] | "";
@@ -1588,6 +1592,7 @@ bool ghFetchDir(const String& repoPath) {
         if (type == "file" &&
             !name.endsWith(".json") &&
             !name.endsWith(".bin"))  continue;
+        if (name.startsWith(".")) continue;
 
         strncpy(ghEntries[ghCount].name, name.c_str(), 47);
         ghEntries[ghCount].name[47] = '\0';
@@ -1821,11 +1826,11 @@ void drawGhBrowser() {
         return;
     }
 
-    for (int row = 0; row < 3; row++) {
+    for (int row = 0; row < 4; row++) {
         int idx = ghScroll + row;
         if (idx >= totalRows) break;
 
-        int y   = 13 + row * 17;
+        int y   = 13 + row * 13;
         bool sel = (idx == ghSel);
 
         String label;
@@ -1843,13 +1848,13 @@ void drawGhBrowser() {
         }
 
         if (sel) {
-            oled.fillRect(0, y - 1, 128, 15, SH110X_WHITE);
+            oled.fillRect(0, y - 1, 128, 13, SH110X_WHITE);
             oled.setTextColor(SH110X_BLACK);
         } else {
             oled.setTextColor(SH110X_WHITE);
         }
         oled.setTextSize(1);
-        oled.setCursor(2, y);
+        oled.setCursor(2, y + 1);
         oled.print(label);
         oled.setTextColor(SH110X_WHITE);
     }
@@ -1864,10 +1869,10 @@ void drawGhBrowser() {
         oled.print("v");
     }
     // Item count
-    oled.setTextSize(1);
-    oled.setCursor(0, 57);
-    oled.setTextColor(SH110X_WHITE);
-    oled.print(String(ghSel + 1) + "/" + String(totalRows));
+    // oled.setTextSize(1);
+    // oled.setCursor(0, 57);
+    // oled.setTextColor(SH110X_WHITE);
+    // oled.print(String(ghSel + 1) + "/" + String(totalRows));
 
     oledFlush();
 }
@@ -2083,7 +2088,7 @@ void handleMenuEncoder() {
     int d = encGetDelta();
     if (d > 0) {
         menuSel = (menuSel + 1) % MENU_COUNT;
-        if (menuSel >= menuScroll + 3) menuScroll = menuSel - 2;
+        if (menuSel >= menuScroll + 4) menuScroll = menuSel - 3;
         if (menuScroll < 0) menuScroll = 0;
         drawMenu();
     } else if (d < 0) {
