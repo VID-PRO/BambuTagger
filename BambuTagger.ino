@@ -1382,12 +1382,14 @@ void apiList() {
 }
 
 void apiDownload() {
-  DBGF("[HTTP]  GET /api/download  url=%s\n",
-       httpServer.arg("url").c_str());
   DynamicJsonDocument req(256);
   deserializeJson(req, httpServer.arg("plain"));
+
   String ghPath = req["path"] | "";
+  ghPath.replace(" ", "%20");
   String fname = req["name"] | "";
+
+  DBGF("[HTTP]  GET /api/download  url=%s\n", ghPath);
 
   DynamicJsonDocument resp(256);
   auto fail = [&](const char* msg) {
@@ -1744,7 +1746,10 @@ bool ghSaveFile(const String& rawUrl, const String& localName) {
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
-  http.begin(client, rawUrl);
+  String rawUrlTmp = rawUrl;
+  rawUrlTmp.replace(" ", "%20");
+
+  http.begin(client, rawUrlTmp);
   http.addHeader("User-Agent", "BambuTagger-ESP32/1.0");
   http.setTimeout(30000);
   int code = http.GET();
