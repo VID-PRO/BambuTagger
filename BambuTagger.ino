@@ -827,7 +827,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0d1117;color:#c9d1d9;min-heig
 .nav h1{color:#58a6ff;font-size:1.2em;flex:1}
 .nav .pill{background:#21262d;border-radius:20px;padding:4px 12px;font-size:.8em;cursor:pointer;border:1px solid #30363d;color:#c9d1d9}
 .nav .pill.active{background:#1f6feb;border-color:#1f6feb;color:#fff}
-.footer h1{color:#58a6ff;font-size:1.2em;position:absolute;align:center;bottom:0px;flex:1}
+.footer{position:absolute;bottom:0px;width:100%;background:#161b22;border-top:1px solid #30363d;padding:12px 20px;display:flex;align-items:center;gap:20px}
 .content{max-width:700px;margin:20px auto;padding:0 16px}
 .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;margin-bottom:16px}
 .card h3{color:#58a6ff;margin-bottom:12px;font-size:1em}
@@ -943,10 +943,8 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
 </div>
 
 <!-- ── FOOTER ─────────────────────────────────────────────── -->
-<div id="footer">
-  <div class="footer">
-    &copy; 2026 by <a href="https://www.vid-pro.de" target=_new>VID-PRO</a>
-  </div>
+<div class="footer">
+  &copy; 2026 by <a href="https://www.vid-pro.de" target=_new>VID-PRO</a>
 </div>
 <!-- /content -->
 
