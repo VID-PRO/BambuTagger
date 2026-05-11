@@ -885,7 +885,6 @@ void ghTokenSave(const String& token) {
 
 // Adds User-Agent, Accept, and (if configured) Bearer Authorization to every GitHub request.
 void ghAddHeaders(HTTPClient& http) {
-  ghAddHeaders(http);
   if (ghToken.length() > 0)
     http.addHeader("Authorization", "Bearer " + ghToken);
 }
@@ -2297,8 +2296,8 @@ void handleDumpSelectEncoder() {
 
     char msg[128];
     snprintf(msg, sizeof(msg),
-             "Write dump:\n%s\n%s\n\nPlace blank card",
-             preview.filamentType, preview.detailedType);
+             "Write dump:%s\n%s\n#%0lX%0lX%0lX\n\nPlace blank card",
+             preview.filamentType, preview.detailedType,  preview.colorR, preview.colorG, preview.colorB);
     showStatus(msg);
     appState = S_DUMP_WRITE;
   }
