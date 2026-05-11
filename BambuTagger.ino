@@ -944,7 +944,10 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
 
 <!-- ── FOOTER ─────────────────────────────────────────────── -->
 <div class="footer">
-  <center>&copy; 2026 by <a href="https://www.vid-pro.de" target=_new>VID-PRO</a></center>
+  <center>&copy; 2026 by <a href="https://www.vid-pro.de" target=_new>VID-PRO</a> | 
+  credits to <a href="https://github.com/Bambu-Research-Group/RFID-Tag-Guide" target=_new>RFID-Tag-Guide</a> |
+  Library from <a href="https://github.com/queengooborg/Bambu-Lab-RFID-Library" target=_new>Bambu-Lab-RFID-Library</a>
+  </center>
 </div>
 <!-- /content -->
 
@@ -1500,7 +1503,7 @@ bool ghFetchDir(const String& repoPath) {
     filter[0]["path"] = true;
     filter[0]["type"] = true;
 
-    DynamicJsonDocument doc(24576);
+    DynamicJsonDocument doc(32000); //24576
     DeserializationError err = deserializeJson(doc, http.getStream(),
                                                DeserializationOption::Filter(filter));
     http.end();
