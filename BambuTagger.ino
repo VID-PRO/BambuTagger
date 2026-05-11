@@ -852,7 +852,7 @@ void drawDumpSelect() {
 // ──────────────────────────────────────────────────────────────
 //  WiFi helpers
 // ──────────────────────────────────────────────────────────────
-String wifiSSID, wifiPass;
+String wifiSSID, wifiPass, ghToken;
 bool apMode = false;
 
 void wifiLoadCreds() {
@@ -860,6 +860,7 @@ void wifiLoadCreds() {
   prefs.begin("wifi", true);
   wifiSSID = prefs.getString("ssid", "");
   wifiPass = prefs.getString("pass", "");
+  ghToken  = prefs.getString("ghtoken", "");
   prefs.end();
 }
 
@@ -871,6 +872,22 @@ void wifiSaveCreds(const String& ssid, const String& pass) {
   prefs.end();
   wifiSSID = ssid;
   wifiPass = pass;
+}
+
+// ── GitHub token helpers ───────────────────────────────────────────────
+void ghTokenSave(const String& token) {
+  DBGF("[WiFi]  Saving GitHub token (%d chars)\n", token.length());
+  prefs.begin("wifi", false);
+  prefs.putString("ghtoken", token);
+  prefs.end();
+  ghToken = token;
+}
+
+// Adds User-Agent, Accept, and (if configured) Bearer Authorization to every GitHub request.
+void ghAddHeaders(HTTPClient& http) {
+  ghAddHeaders(http);
+  if (ghToken.length() > 0)
+    http.addHeader("Authorization", "Bearer " + ghToken);
 }
 
 bool wifiConnect() {
@@ -967,8 +984,11 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
     <input type="text" id="wifi-ssid" placeholder="Your WiFi name">
     <label>Password</label>
     <input type="password" id="wifi-pass" placeholder="Password (leave blank if open)">
+    <label style="margin-top:12px">GitHub API Token <span style="color:#8b949e;font-size:.8em">(optional &mdash; avoids rate&nbsp;limits)</span></label>
+    <input type="password" id="gh-token" placeholder="ghp_…" autocomplete="off">
     <br><br>
     <button class="btn btn-primary" onclick="saveWifi()">💾 Save &amp; Connect</button>
+    <button class="btn btn-secondary" onclick="saveToken()">🔑 Save Token</button>
     <button class="btn btn-secondary" onclick="scanNets()">🔍 Scan</button>
     <div id="nets" style="margin-top:10px"></div>
   </div>
@@ -1059,6 +1079,9 @@ function loadWifiStatus() {
       ? `✅ Connected to <b>${d.ssid}</b><br>Device IP: <b>${d.ip}</b>`
       : '❌ Not connected. Enter credentials below.';
     document.getElementById('wifi-ssid').value = d.ssid || '';
+    fetch('/api/token').then(r=>r.json()).then(t=>{
+      document.getElementById('gh-token').value = t.token || '';
+    }).catch(()=>{});
   }).catch(()=>{});
 }
 
@@ -1072,6 +1095,17 @@ function saveWifi() {
     el.innerHTML = d.message;
     if(d.success) setTimeout(loadWifiStatus, 5000);
   });
+}
+
+function saveToken() {
+  const tok = document.getElementById('gh-token').value.trim();
+  fetch('/api/token',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({token:tok})})
+  .then(r=>r.json()).then(d=>{
+    const el = document.getElementById('wstatus');
+    el.className = 'status '+(d.success?'ok':'err');
+    el.innerHTML = d.message;
+  }).catch(()=>{});
 }
 
 function scanNets() {
@@ -1324,6 +1358,34 @@ void apiScan() {
   httpServer.send(200, "application/json", out);
 }
 
+// ── GitHub token API ──────────────────────────────────────────────────────
+void apiTokenGet() {
+  DBGLN("[HTTP]  GET /api/token");
+  DynamicJsonDocument doc(128);
+  doc["token"] = ghToken;
+  String out;
+  serializeJson(doc, out);
+  httpServer.send(200, "application/json", out);
+}
+
+void apiTokenSet() {
+  DBGLN("[HTTP]  POST /api/token");
+  DynamicJsonDocument doc(256);
+  deserializeJson(doc, httpServer.arg("plain"));
+  String token = doc["token"] | "";
+  token.trim();
+  ghTokenSave(token);
+  DynamicJsonDocument resp(128);
+  resp["success"] = true;
+  if (token.length() > 0)
+    resp["message"] = "Token saved (" + String(token.length()) + " chars)";
+  else
+    resp["message"] = "Token cleared";
+  String out;
+  serializeJson(resp, out);
+  httpServer.send(200, "application/json", out);
+}
+
 /* Fetch GitHub API directory listing and return filtered JSON */
 void apiList() {
   DBGLN("[HTTP]  GET /api/list");
@@ -1341,7 +1403,7 @@ void apiList() {
   HTTPClient http;
   String url = "https://" GITHUB_API_HOST "/repos" GITHUB_REPO_PATH "/contents/" + path;
   http.begin(client, url);
-  http.addHeader("User-Agent", "BambuTagger-ESP32/1.0");
+  ghAddHeaders(http);
   int code = http.GET();
 
   if (code != 200) {
@@ -1417,7 +1479,7 @@ void apiDownload() {
   client.setInsecure();
   HTTPClient http;
   http.begin(client, String(GITHUB_RAW_PREFIX) + ghPath);
-  http.addHeader("User-Agent", "BambuTagger-ESP32/1.0");
+  ghAddHeaders(http);
   int code = http.GET();
   if (code != 200) {
     fail(("HTTP " + String(code)).c_str());
@@ -1551,7 +1613,9 @@ void setupHTTPServer() {
     httpServer.send_P(200, "text/html", INDEX_HTML);
   });
   httpServer.on("/api/status", HTTP_GET, apiStatus);
-  httpServer.on("/api/wifi", HTTP_POST, apiWifi);
+  httpServer.on("/api/wifi",    HTTP_POST, apiWifi);
+  httpServer.on("/api/token",   HTTP_GET,  apiTokenGet);
+  httpServer.on("/api/token",   HTTP_POST, apiTokenSet);
   httpServer.on("/api/scan", HTTP_GET, apiScan);
   httpServer.on("/api/list", HTTP_GET, apiList);
   httpServer.on("/api/download", HTTP_POST, apiDownload);
@@ -1604,8 +1668,7 @@ bool ghFetchDir(const String& repoPath) {
   client.setInsecure();
   HTTPClient http;
   http.begin(client, url);
-  http.addHeader("User-Agent", "BambuTagger-ESP32/1.0");
-  http.addHeader("Accept", "application/vnd.github.v3+json");
+  ghAddHeaders(http);
   http.setTimeout(20000);
   int code = http.GET();
   if (code != 200) {
@@ -1750,7 +1813,7 @@ bool ghSaveFile(const String& rawUrl, const String& localName) {
   rawUrlTmp.replace(" ", "%20");
 
   http.begin(client, rawUrlTmp);
-  http.addHeader("User-Agent", "BambuTagger-ESP32/1.0");
+  ghAddHeaders(http);
   http.setTimeout(30000);
   int code = http.GET();
   if (code != 200) {

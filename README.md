@@ -14,8 +14,9 @@ Designed around the MIFARE Classic 1K tags embedded in Bambu Lab spools, with fu
 | **OLED menu** | 5-item navigable menu on a 128×64 SH110X / SH1106G display |
 | **Rotary encoder** | KY-040 encoder for scroll + click navigation |
 | **WS2812B LED** | Single addressable LED showing filament colour and status |
-| **Web UI** | Three-tab interface: Status / WiFi, Scan & Download, Files |
+| **Web UI** | Four-tab interface: Files / Dumps / Status / WiFi |
 | **GitHub browser** | Browse & download dump files directly on the OLED (no PC needed) |
+| **GitHub API token** | Optional personal access token for higher API rate limits (5 000 req/hr) |
 | **File upload** | Drag-and-drop or file-picker upload of `.bin` dumps to SPIFFS |
 | **WiFi** | Auto-STA on boot; AP fallback `BambuTagger` / `bambu1234` |
 | **Serial debug** | Timestamped debug output; disable with `#define DEBUG_SERIAL 0` |
@@ -128,6 +129,8 @@ Browse the [Bambu Lab RFID Library](https://github.com/queengooborg/Bambu-Lab-RF
 
 Downloaded files are immediately available in **3 · Write Dump**.
 
+> **Tip:** Set a GitHub personal access token in the **WiFi tab** of the web UI to raise the API rate limit from 60 to 5 000 requests/hour.
+
 ### 5 · WiFi / Web
 Shows the current IP address (STA or AP).  Open a browser to the displayed address to access the web UI.
 
@@ -140,7 +143,7 @@ Connect to the ESP32's IP (shown on the OLED) in any browser.
 ### Tab 1 — Files
 - Lists all `.bin` dump files stored on SPIFFS.
 - **Upload** new files via drag-and-drop or file picker (`.bin` only, max 1 KB).
-- **Delete** any file. 
+- **Delete** any file.
 
 ### Tab 2 — Dumps
 - Browse the GitHub repository tree by folder path.
@@ -148,13 +151,15 @@ Connect to the ESP32's IP (shown on the OLED) in any browser.
 
 ### Tab 3 — Status
 - Shows current WiFi mode, SSID, and IP address.
-- Shows free Heap and SPIFFS
-- Shows all data from last read tag
+- Shows free Heap and SPIFFS usage.
+- Shows all data from the last read tag.
 
 ### Tab 4 — WiFi
 - Shows current WiFi mode, SSID, and IP address.
 - Scan for networks and connect to a new SSID + password.
-- Credentials are saved to SPIFFS (`/wifi.json`) and restored on every boot.
+- Credentials are saved to ESP32 NVS (via `Preferences`, namespace `wifi`) and restored on every boot — no file is written to SPIFFS.
+- **GitHub API Token** — enter a personal access token (read-only, no scopes required) and click **🔑 Save Token**.  The token is stored in NVS and injected as a `Bearer` header into every GitHub API request.  Leave blank to use unauthenticated access (60 req/hr limit).
+
 ---
 
 ## REST API
@@ -171,6 +176,8 @@ All endpoints return JSON unless noted.
 | `GET` | `/api/files` | Array of `.bin` filenames on SPIFFS |
 | `POST` | `/api/delete` | `{"file":"…"}` — delete a SPIFFS file |
 | `POST` | `/api/upload` | `multipart/form-data` field `file` — upload a `.bin` |
+| `GET` | `/api/token` | Returns `{"token":"ghp_…"}` (masked after first 4 chars) |
+| `POST` | `/api/token` | `{"token":"…"}` — save GitHub API token to NVS |
 
 ---
 
@@ -197,10 +204,27 @@ All endpoints return JSON unless noted.
 
 ## WiFi / Networking
 
-1. On boot the sketch loads `/wifi.json` from SPIFFS and attempts to connect to the saved SSID.
+1. On boot the sketch loads saved credentials from ESP32 NVS (`Preferences`, namespace `wifi`) and attempts to connect to the saved SSID.
 2. If connection succeeds within 10 s, the OLED shows the IP and the LED turns dim cyan.
 3. If it fails, the AP `BambuTagger` (password `bambu1234`) is started at `192.168.4.1` and the LED turns dim amber.
 4. Use the **WiFi / Web** menu or the web UI to change credentials at any time.
+
+---
+
+## GitHub API Token
+
+The OLED GitHub browser and the web Dumps tab both use the GitHub REST API to list repository contents.  Without authentication, GitHub enforces a limit of **60 requests per hour** per IP address.
+
+To avoid hitting this limit:
+
+1. Generate a free GitHub **Personal Access Token** (classic or fine-grained):  
+   → [github.com/settings/tokens](https://github.com/settings/tokens)  
+   No scopes are required — a token with zero permissions is sufficient for reading public repositories.
+2. Open the BambuTagger web UI → **WiFi tab**.
+3. Paste the token into the **GitHub API Token** field and click **🔑 Save Token**.
+4. The token is saved to NVS and used automatically for all subsequent GitHub requests (rate limit raised to **5 000 req/hr**).
+
+> The token is sent only to `api.github.com` and `raw.githubusercontent.com`.  It is never logged to serial output.
 
 ---
 
@@ -261,12 +285,12 @@ To disable all debug output and save flash/RAM:
 ## SPIFFS Layout
 
 ```
-/wifi.json          — saved WiFi credentials
-/dumps/
-    PLA_Black.bin   — user-uploaded or GitHub-downloaded dump files
-    ABS_Red.bin
-    …
+/PLA_Black.bin      — user-uploaded or GitHub-downloaded dump files
+/ABS_Red.bin
+/…
 ```
+
+> WiFi credentials and the GitHub API token are stored in ESP32 NVS (flash key-value store via `Preferences`), not in SPIFFS.
 
 ---
 
