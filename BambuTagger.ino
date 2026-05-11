@@ -1945,6 +1945,10 @@ void handleGhBrowseEncoder() {
         // re-fetch parent without pushing again
         ghSel    = 0;
         ghScroll = 0;
+        if (parentPath == "") {
+            enterMainMenu();
+            return;
+        }
         showStatus2("Loading", "Github Library");
         ghFetchDir(parentPath);
         drawGhBrowser();
