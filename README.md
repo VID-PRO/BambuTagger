@@ -59,7 +59,7 @@ Designed around the MIFARE Classic 1K tags embedded in Bambu Lab spools, with fu
 | Encoder BTN | 32 |
 | WS2812B DIN | 26 |
 
-Schematics are here schematics/schematics.png    
+Schematics are here [schematics](/schematics/schematics.png)   
 > All encoder and button pins are INPUT_PULLUP; the encoder button is active-low.
 
 ---
