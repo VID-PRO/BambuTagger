@@ -6,6 +6,7 @@
  *  Dump library:  https://github.com/queengooborg/Bambu-Lab-RFID-Library
                    https://bambuman.ee/
  *  Tag format:    https://github.com/queengooborg/Bambu-Lab-RFID-Tag-Guide
+                   https://github.com/Bambu-Research-Group/RFID-Tag-Guide
  *
  *  KEY DERIVATION (KDF):
  *    Keys = HKDF-SHA256(IKM=UID[4], salt=BAMBU_KDF_SALT[16],
@@ -35,11 +36,11 @@
  *  └──────────────────────────────────────────────────────────┘
  *
  *  REQUIRED LIBRARIES (Arduino Library Manager):
- *    • MFRC522            (miguelbalboa)
- *    • Adafruit SH110X
- *    • Adafruit GFX Library
- *    • Adafruit NeoPixel  (Adafruit)
- *    • ArduinoJson        (Benoit Blanchon)
+ *    • MFRC522               (miguelbalboa)
+ *    • Adafruit SH110X       (Adafruit)
+ *    • Adafruit GFX Library  (Adafruit)
+ *    • Adafruit NeoPixel     (Adafruit)
+ *    • ArduinoJson           (Benoit Blanchon)
  *    mbedTLS is bundled with the ESP32 Arduino core.
  *
  *  WRITE OPERATIONS NEED A "MAGIC" / UID-CHANGEABLE MIFARE CARD
@@ -420,9 +421,9 @@ static void parseTagBlocks(TagInfo* t) {
   trimStr(t->materialId, 8);
 
   // Color (BGRA, block 5 bytes 0-3)
-  t->colorB = t->raw[5][0];
+  t->colorR = t->raw[5][0];
   t->colorG = t->raw[5][1];
-  t->colorR = t->raw[5][2];
+  t->colorB = t->raw[5][2];
 
   // Spool weight   – block 5 bytes 4-5 (little-endian uint16)
   t->spoolWeight = (uint16_t)t->raw[5][4] | ((uint16_t)t->raw[5][5] << 8);
@@ -552,8 +553,14 @@ bool rfidReadBambuTag(TagInfo* t) {
    the key embedded in the dump (for already-keyed sectors).
    Pass isMagicCard=true to also write block 0 (UID). */
 bool rfidWriteDump(const uint8_t* buf, bool isMagicCard) {
-  if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial())
+  if (!rfid.PICC_IsNewCardPresent()) {
+    DBGF("[WRITE] PICC_IsNewCardPresent FAIL");
     return false;
+  }
+  if (!rfid.PICC_ReadCardSerial()) {
+    DBGF("[WRITE] PICC_ReadCardSerial FAIL");
+    return false;
+  }
 
   MFRC522::MIFARE_Key kDef;
   memset(kDef.keyByte, 0xFF, 6);
