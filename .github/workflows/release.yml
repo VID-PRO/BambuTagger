@@ -81,7 +81,7 @@ jobs:
         run: |
           pip install esptool --quiet
           # Locate the ESP32 build artefacts
-          BOOT=$(find ~/.arduino15 -name "bootloader_dio_80m.bin" | head -1)
+          BOOT="${{ github.workspace }}/build/BambuTagger.ino.bootloader.bin"
           PART="${{ github.workspace }}/build/BambuTagger.ino.partitions.bin"
           APP="${{ github.workspace }}/build/BambuTagger.ino.bin"
           MERGED="${{ github.workspace }}/build/BambuTagger_merged.bin"
