@@ -1,0 +1,9 @@
+- uses: arduino/compile-sketches@v1
+  with:
+    fqbn: "arduino:esp32:esp32devkit"
+    libraries: |
+      - name: MFRC522
+      - name: Adafruit SH110X
+      - name: Adafruit GFX Library
+      - name: ArduinoJson
+      - name: Adafruit NeoPixel
