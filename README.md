@@ -485,9 +485,10 @@ To disable all debug output and save flash/RAM:
 
 - Dump files: [queengooborg/Bambu-Lab-RFID-Library](https://github.com/queengooborg/Bambu-Lab-RFID-Library)
 - Community tag database: [bambuman.ee](https://bambuman.ee/tags)
+- [RFID-Tag-Guide](https://github.com/Bambu-Research-Group/RFID-Tag-Guide)
 - HKDF key derivation research: Bambu Lab community reverse-engineering
-- MFRC522 library: miguelbalboa
-- Adafruit SH110X / GFX / NeoPixel libraries: Adafruit Industries
+- MFRC522 library: by [miguelbalboa](https://github.com/makerspaceleiden/rfid)
+- [Adafruit SH110X](https://github.com/adafruit/Adafruit_SH110X) / [GFX](https://github.com/adafruit/Adafruit-GFX-Library) / [NeoPixel](https://github.com/adafruit/Adafruit_NeoPixel) libraries: Adafruit Industries
 
 ---
 
