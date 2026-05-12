@@ -414,9 +414,9 @@ static void parseTagBlocks(TagInfo* t) {
   trimStr(t->materialId, 8);
 
   // Color (BGRA, block 5 bytes 0-3)
-  t->colorB = t->raw[5][0];
+  t->colorR = t->raw[5][0];
   t->colorG = t->raw[5][1];
-  t->colorR = t->raw[5][2];
+  t->colorB = t->raw[5][2];
 
   // Spool weight   – block 5 bytes 4-5 (little-endian uint16)
   t->spoolWeight = (uint16_t)t->raw[5][4] | ((uint16_t)t->raw[5][5] << 8);
