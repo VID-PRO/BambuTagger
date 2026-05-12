@@ -11,12 +11,14 @@ Designed around the MIFARE Classic 1K tags embedded in Bambu Lab spools, with fu
 |----------|---------|
 | **RFID** | Read, clone, and write Bambu Lab MIFARE Classic 1K spool tags |
 | **Key derivation** | HKDF-SHA256 with Bambu Lab salt — no hardcoded keys |
-| **OLED menu** | 5-item navigable menu on a 128×64 SH110X / SH1106G display |
+| **OLED menu** | 6-item navigable menu on a 128×64 SH110X / SH1106G display |
 | **Rotary encoder** | ENC11/KY-040 encoder for scroll + click navigation |
 | **WS2812B LED** | Single addressable LED showing filament colour and status |
-| **Web UI** | Four-tab interface: Files / Dumps / Status / WiFi |
+| **Web UI** | Five-tab interface: Files / Dumps / Status / WiFi / BambuMan |
 | **GitHub browser** | Browse & download dump files directly on the OLED (no PC needed) |
 | **GitHub API token** | Optional personal access token for higher API rate limits (5 000 req/hr) |
+| **BambuMan OLED browser** | Browse the bambuman.ee catalog by Material → Type → Color → UID on the OLED; sync the catalog directly from the OLED without a PC |
+| **BambuMan web search** | Sync catalog, filter by material/color, fetch & write from web UI |
 | **File upload** | Drag-and-drop or file-picker upload of `.bin` dumps to FAT |
 | **Directory structure** | Downloaded files mirror the GitHub repo tree on FAT, e.g. `/PLA/PLA_BASIC/BLACK/3AD82DAD.bin` |
 | **FAT browser (OLED)** | "Write Dump" navigates the real directory tree on-device — no flat list |
@@ -101,7 +103,8 @@ Press and hold, or select **\<\< MENU** (always the first row in any browser) to
 │   2 Clone Tag   │
 │   3 Write Dump  │
 │   4 GitHub Lib  │
-│   5 WiFi / Web  │
+│   5 BambuMan    │
+│   6 WiFi / Web  │
 └─────────────────┘
 ```
 
@@ -169,7 +172,69 @@ Downloaded files are immediately available in **3 · Write Dump**.
 
 > **Tip:** Set a GitHub personal access token in the **WiFi tab** of the web UI to raise the API rate limit from 60 to 5 000 requests/hour.
 
-### 5 · WiFi / Web
+### 5 · BambuMan Lib
+Browse the [bambuman.ee](https://bambuman.ee/tags) community tag database **directly on the OLED** in a 4-level hierarchy.  Requires WiFi.  The catalog can be synced from the OLED itself — no PC or web browser needed.
+
+#### Catalog hierarchy
+
+At the **Material level** (top), two fixed rows always appear before any material entries:
+
+```
+<< MENU
+> Sync Catalog          ← sync the catalog without leaving the OLED
+PLA
+PETG
+ABS
+TPU
+…
+```
+
+Drill down to reach individual UIDs:
+
+```
+Material (PLA, PETG, ABS, TPU …)
+  └─ Type (PLA_BASIC, PLA_MATTE …)
+        └─ Color (BLACK, RED, MARBLE …)
+              └─ UID (3AD82DAD, 9510C2A3 …)  ← click to fetch & write
+```
+
+#### Encoder controls
+
+| Encoder action | Result |
+|----------------|--------|
+| Rotate | Move cursor up / down |
+| Click `<< MENU` (Material level) | Return to main menu |
+| Click `> Sync Catalog` (Material level) | Run catalog sync on-device (see below) |
+| Click `< BACK` (deeper levels) | Go up one level |
+| Click a Material / Type / Color | Navigate into it |
+| Click a UID | Fetch `data.bin` from bambuman.ee → save to `/BM/<UID>.bin` |
+| Click after a successful fetch | Enter RFID write flow immediately |
+| Rotate after a successful fetch | Cancel fetch result, stay in browser |
+
+#### OLED Sync Catalog flow
+
+Clicking **> Sync Catalog** runs a 4-step progress sequence directly on the OLED:
+
+| Step | Display | What happens |
+|------|---------|-------------|
+| 1 | `1/4 Find ZIP…` | Probes `bambuman.ee/files/data_YYYY-MM-DD.zip` for the last 7 days |
+| 2 | `2/4 Getting size…` | HTTP HEAD request to determine ZIP length |
+| 3 | `3/4 Read EOCD…` | Fetches the last 512 bytes to locate the central directory |
+| 4 | `4/4 Writing…` (counter) | Streams the central directory only (~400 KB Range request), writes `/BM/catalog.json` |
+
+On success the OLED shows **"Done! N entries"** and the LED flashes green — click the encoder to return to the material browser.  On any error a red message is shown for 3 seconds before returning to the browser.
+
+> **No decompression** — only the ZIP file listing is fetched, not the full archive.  The Range request is typically 400–500 KB regardless of how many dump files are in the ZIP.
+
+#### Error states
+
+| Message | Meaning |
+|---------|---------|
+| `No catalog — sync first` | `/BM/catalog.json` is missing — use `> Sync Catalog` (row 1) or the web UI BambuMan tab |
+| `UID not found` | HTTP 404 from bambuman.ee |
+| `Blocked (CF) — try Web UI` | HTTP 403 (Cloudflare) — use the web UI BambuMan tab instead |
+
+### 6 · WiFi / Web
 Shows the current IP address (STA or AP).  Open a browser to the displayed address to access the web UI.
 
 ---
@@ -205,6 +270,30 @@ Fully navigable browser for the FAT file system.
 - Credentials are saved to ESP32 NVS (via `Preferences`, namespace `wifi`) and restored on every boot — no file is written to FAT.
 - **GitHub API Token** — enter a personal access token (read-only, no scopes required) and click **🔑 Save Token**.  The token is stored in NVS and injected as a `Bearer` header into every GitHub API request.  Leave blank to use unauthenticated access (60 req/hr limit).
 
+### Tab 5 — BambuMan
+Browse and search the [bambuman.ee](https://bambuman.ee/tags) community tag database without leaving the web UI.
+
+#### Sync Catalog
+Click **🔄 Sync Catalog** to fetch the bambuman.ee file index.  The ESP32 sends an HTTP Range request for the ZIP **central directory only** (~400 KB, no decompression), parses all `Material/Type/Color/UID/data.bin` paths, and saves them to `/BM/catalog.json` on FAT.
+
+- Takes ~30–60 seconds on first run.
+- The entry count is shown after a successful sync (e.g. "2 622 entries — ready to search").
+- Re-sync any time to pick up new community dumps.
+- The same sync can also be triggered from the OLED (**5 BambuMan Lib → > Sync Catalog**) without opening a browser.
+
+#### Search
+- **Material dropdown** — auto-populated from the catalog (PLA, PETG, ABS, TPU …).
+- **Color / name text input** — live-filters the results as you type.
+- Scrollable results table (up to 100 rows): UID · Material · Type · Color.
+- Per-row **⬇ Fetch** — downloads `data.bin` to `/BM/<UID>.bin`.
+- Per-row **✏️ Write** — downloads (if not already cached) and queues a tag-write (20 s window).
+
+#### Fetch by UID
+Enter a known UID directly and click **⬇ Fetch** to retrieve `data.bin` from `https://bambuman.ee/api/tags/{UID}/data.bin`.  File is saved to `/BM/<UID>.bin`.
+
+#### Downloaded files
+Lists all files in `/BM/` with **✍️ Write** and **🗑 Delete** buttons.
+
 ---
 
 ## REST API
@@ -217,13 +306,16 @@ All endpoints return JSON unless noted.
 | `POST` | `/api/wifi` | `{"ssid":"…","pass":"…"}` — connect & save |
 | `GET` | `/api/scan` | Array of nearby SSIDs |
 | `GET` | `/api/list?path=…` | GitHub directory listing for `path` |
-| `POST` | `/api/download` | `{"url":"…","path":"…"}` — download raw file to FAT, filename auto-derived from `path` |
-| `GET` | `/api/files?dir=<path>` | Directory listing for `path` (default `/`); returns `{path, entries:[{name,isDir,size?}]}` |
+| `POST` | `/api/download` | `{"url":"…","path":"…"}` — download raw file to FAT |
+| `GET` | `/api/files?dir=<path>` | FAT directory listing; returns `{path, entries:[{name,isDir,size?}]}` |
 | `POST` | `/api/delete` | `{"file":"…"}` — delete a FAT file |
-| `POST` | `/api/writetag` | `{"path":"…"}` — load FAT dump and start tag-write (20 s window); poll `/api/status` `app_state` for completion |
+| `POST` | `/api/writetag` | `{"path":"…"}` — load FAT dump and start tag-write (20 s window) |
 | `POST` | `/api/upload` | `multipart/form-data` field `file` — upload a `.bin` |
 | `GET` | `/api/token` | Returns `{"token":"ghp_…"}` (masked after first 4 chars) |
 | `POST` | `/api/token` | `{"token":"…"}` — save GitHub API token to NVS |
+| `POST` | `/api/bm/sync` | Fetch bambuman.ee ZIP central directory → save `/BM/catalog.json` |
+| `GET` | `/api/bm/catalog` | Stream `/BM/catalog.json` from FAT |
+| `GET` | `/api/bm/fetch?uid=XXXXXXXX` | Fetch `data.bin` from bambuman.ee → `/BM/<UID>.bin` |
 
 ---
 
@@ -240,7 +332,7 @@ All endpoints return JSON unless noted.
 | Write / clone failure | 🔴 3 × red flash |
 | Timeout / no tag | 🔴 2 × red flash |
 | GitHub fetch in progress | 🔵 Fast-breathing blue |
-| GitHub download | 🟡 Solid yellow |
+| GitHub / BambuMan download | 🟡 Solid yellow |
 | Download success | 🟢 3 × green flash |
 | Download failure | 🔴 3 × red flash |
 | WiFi STA connected | 💙 Dim cyan |
@@ -283,14 +375,13 @@ Downloaded dump files are stored in a directory tree that mirrors the GitHub rep
 - Spaces are replaced with **underscores**
 - The leaf filename is always `<UID>.bin` (extension forced to `.bin`)
 
-| Repo path | FAT path |
-|-----------|----------|
-| `PLA/PLA Basic/Black/3AD82DAD/dump.bin` | `/PLA/PLA_BASIC/BLACK/3AD82DAD.bin` |
-| `ABS/ABS Basic/Red/F1A2B3C4/dump.json` | `/ABS/ABS_BASIC/RED/F1A2B3C4.bin` |
-| `TPU/TPU 95A HF/White/00112233/dump.bin` | `/TPU/TPU_95A_HF/WHITE/00112233.bin` |
-| `PETG/PETG HF/Bambu Green/AABBCCDD/dump.bin` | `/PETG/PETG_HF/BAMBU_GREEN/AABBCCDD.bin` |
-
-Manually uploaded files (via the web UI) are placed at the FAT root (`/`) as-is.
+| Source | FAT path |
+|--------|----------|
+| GitHub: `PLA/PLA Basic/Black/3AD82DAD/dump.bin` | `/PLA/PLA_BASIC/BLACK/3AD82DAD.bin` |
+| GitHub: `ABS/ABS Basic/Red/F1A2B3C4/dump.json` | `/ABS/ABS_BASIC/RED/F1A2B3C4.bin` |
+| BambuMan: UID `9510C2A3` | `/BM/9510C2A3.bin` |
+| BambuMan catalog index | `/BM/catalog.json` |
+| Manual web upload | `/<filename>.bin` (flat at root) |
 
 ---
 
@@ -351,8 +442,12 @@ To disable all debug output and save flash/RAM:
 ## FAT Layout
 
 ```
-/                                    — manually uploaded files live here
+/                                    — manually uploaded files
   my_custom_dump.bin
+  BM/
+    catalog.json                     — bambuman.ee catalog (sync once from web UI)
+    9510C2A3.bin                     — fetched via BambuMan OLED browser or web UI
+    3AD82DAD.bin
   PLA/
     PLA_BASIC/
       BLACK/
@@ -385,6 +480,7 @@ To disable all debug output and save flash/RAM:
 ## Credits & References
 
 - Dump files: [queengooborg/Bambu-Lab-RFID-Library](https://github.com/queengooborg/Bambu-Lab-RFID-Library)
+- Community tag database: [bambuman.ee](https://bambuman.ee/tags)
 - HKDF key derivation research: Bambu Lab community reverse-engineering
 - MFRC522 library: miguelbalboa
 - Adafruit SH110X / GFX / NeoPixel libraries: Adafruit Industries

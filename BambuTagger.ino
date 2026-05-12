@@ -247,7 +247,10 @@ enum AppState {
   S_DUMP_WRITE,
   S_WIFI_INFO,
   S_GH_BROWSE,   // GitHub OLED browser
-  S_GH_DOWNLOAD  // downloading dump file to FAT
+  S_GH_DOWNLOAD,  // downloading dump file to FAT
+  S_BM_BROWSE,     // BambuMan OLED browser (waiting for tag)
+  S_BM_DOWNLOAD,   // BambuMan fetch in progress
+  S_BM_CAT_BROWSE  // BambuMan catalog 4-level OLED browser
 };
 AppState appState = S_MAIN_MENU;
 
@@ -258,12 +261,14 @@ static const char* MENU_ITEMS[] = {
   "1 Read Tag",
   "2 Clone Tag",
   "3 Write Dump",
-  "4 GitHub Library",
-  "5 WiFi / Web"
+  "4 GitHub Lib",
+  "5 BambuMan Lib",
+  "6 WiFi / Web"
 };
-static const int MENU_COUNT = 5;
+static const int MENU_COUNT = 6;
 int menuSel = 0;
 int menuScroll = 0;
+String bmFetchUid = "";    // UID fetched from BambuMan
 
 // ──────────────────────────────────────────────────────────────
 //  Rotary encoder (polling, software debounce)
@@ -414,9 +419,9 @@ static void parseTagBlocks(TagInfo* t) {
   trimStr(t->materialId, 8);
 
   // Color (BGRA, block 5 bytes 0-3)
-  t->colorR = t->raw[5][0];
+  t->colorB = t->raw[5][0];
   t->colorG = t->raw[5][1];
-  t->colorB = t->raw[5][2];
+  t->colorR = t->raw[5][2];
 
   // Spool weight   – block 5 bytes 4-5 (little-endian uint16)
   t->spoolWeight = (uint16_t)t->raw[5][4] | ((uint16_t)t->raw[5][5] << 8);
@@ -823,6 +828,20 @@ static String ghStack[GH_MAX_DEPTH];  // path at each navigation depth
 static int ghDepth = 0;
 static String ghDlStatus;  // result message after download
 
+// ──────────────────────────────────────────────────────────────
+//  BambuMan catalog OLED browser state
+// ──────────────────────────────────────────────────────────────
+#define BM_MAX_ENTRIES 64
+struct BmCatEntry { char label[32]; };
+static BmCatEntry bmCatEntries[BM_MAX_ENTRIES];
+static int bmCatCount  = 0;
+static int bmCatSel    = 0;
+static int bmCatScroll = 0;
+static int bmCatLevel  = 0;  // 0=material, 1=type, 2=color, 3=uid
+static char bmCatMat[32]   = "";
+static char bmCatType[32]  = "";
+static char bmCatColor[32] = "";
+
 // Total visible rows (always adds 1 nav row: "<< MENU" at root, "< BACK" in sub-dirs)
 inline int fatTotalRows() { return fatCount + 1; }
 
@@ -1006,7 +1025,8 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
 <div class="nav">
   <h1><img style="vertical-align:middle" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgAgMAAAAOFJJnAAABhWlDQ1BJQ0MgcHJvZmlsZQAAKJF9kb9Lw0AcxV9bS6VUHawg4pChOrWLijiWKhbBQmkrtOpgcukvaNKQpLg4Cq4FB38sVh1cnHV1cBUEwR8g/gHipOgiJX4vKbSI8eC4D+/uPe7eAd5WjSlGXxxQVFPPJBNCvrAqBF7hRxAjGERUZIaWyi7m4Dq+7uHh612MZ7mf+3MMyEWDAR6BOM403STeIJ7dNDXO+8RhVhFl4nPiqE4XJH7kuuTwG+eyzV6eGdZzmXniMLFQ7mGph1lFV4hniCOyolK+N++wzHmLs1JrsM49+QtDRXUly3Wa40hiCSmkIUBCA1XUYCJGq0qKgQztJ1z8Y7Y/TS6JXFUwciygDgWi7Qf/g9/dGqXpKScplAD8L5b1MQEEdoF207K+jy2rfQL4noErteuvt4C5T9KbXS1yBAxtAxfXXU3aAy53gNEnTdRFW/LR9JZKwPsZfVMBGL4FgmtOb519nD4AOepq+QY4OAQmy5S97vLu/t7e/j3T6e8HrYRyvp7c8c0AAAAJUExURXIA83m/boC9efRkY8YAAAABdFJOUwBA5thmAAAAAWJLR0QAiAUdSAAAAL1JREFUGNNNkLEKg0AMhv8GHO52H0FR36SbCJHD6XASn+Lazb1XHG8R1Kds7kqLgZAvGZL/D3CJbXCp1sxTAs/cx5HmvWErUJhvYgsA9QJv6AAvzUqeXe5Au5qPNrMyL4GXslCuAppbK4B6AhkUDr6PUDpYBQiUgZw2Bs02KJsn4KVjgWLh+8idQbawVTwaqGeERwttfZv1coKMXrMgR2lFVcX9f2GIm5PUwpBL4omPOdlJBpNT9bOM87y+5AM/WTesHvLO9wAAAABJRU5ErkJggg=="> BambuTagger</h1>
   <div class="pill active"  id="tab-local-btn"  onclick="switchTab('local')">Files</div>
-  <div class="pill"         id="tab-github-btn" onclick="switchTab('github')">Library</div>
+  <div class="pill"         id="tab-github-btn"   onclick="switchTab('github')">Library</div>
+  <div class="pill"         id="tab-bambuman-btn" onclick="switchTab('bambuman')">BambuMan</div>
   <div class="pill"         id="tab-status-btn" onclick="switchTab('status')">Status</div>
   <div class="pill"         id="tab-wifi-btn"   onclick="switchTab('wifi')">WiFi</div>
 </div>
@@ -1070,6 +1090,61 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
 
 </div>
 
+
+<!-- ── BAMBUMAN TAB ─────────────────────────────────────── -->
+<div id="tab-bambuman" class="hidden">
+  <div class="section-title">BambuMan Library</div>
+  <p style="font-size:.85em;color:#8b949e;margin:0 0 12px">
+    2,600+ community NFC dumps from
+    <a href="https://bambuman.ee/tags" target="_blank" style="color:#58a6ff">bambuman.ee</a>.
+    Sync the catalog once, then search by material or color name.
+  </p>
+
+  <!-- Sync -->
+  <div class="card" style="margin-bottom:10px">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button onclick="bmSync()" class="btn" id="bm-sync-btn">&#x1F504; Sync Catalog</button>
+      <span id="bm-catalog-info" style="font-size:.8em;color:#8b949e">Not synced yet &#x2014; click to download index</span>
+    </div>
+    <div id="bm-sync-status" style="margin-top:6px"></div>
+  </div>
+
+  <!-- Search -->
+  <div class="card" style="margin-bottom:10px">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <select id="bm-mat-filter" onchange="bmSearch()"
+              style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;
+                     padding:6px 10px;border-radius:6px;font-size:.9em">
+        <option value="">All Materials</option>
+      </select>
+      <input id="bm-name-filter" placeholder="Search color / name&#x2026;" oninput="bmSearch()"
+             style="flex:1;min-width:140px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;
+                    padding:6px 10px;border-radius:6px;font-size:.9em">
+      <span id="bm-result-count" style="font-size:.8em;color:#8b949e;white-space:nowrap"></span>
+    </div>
+    <div id="bm-results" style="max-height:320px;overflow-y:auto;font-size:.85em"></div>
+  </div>
+
+  <!-- Fetch by UID -->
+  <div class="card">
+    <div class="section-title" style="font-size:.85em;margin:0 0 6px">Fetch by UID</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input id="bm-uid" placeholder="Tag UID (e.g. 9510C2A3)" maxlength="16"
+             style="flex:1;min-width:140px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;
+                    padding:6px 10px;border-radius:6px;font-family:monospace;font-size:.9em">
+      <button onclick="bmFetch()" class="btn" style="white-space:nowrap">&#x2B07; Fetch</button>
+      <a href="https://bambuman.ee/tags" target="_blank" class="btn"
+         style="text-decoration:none;white-space:nowrap">&#x1F517; Browse</a>
+    </div>
+    <div id="bm-status" style="margin-top:6px"></div>
+  </div>
+
+  <!-- Downloaded -->
+  <div class="section-title" style="margin-top:14px">
+    Downloaded files <span id="bm-count" style="font-weight:normal;font-size:.8em;color:#8b949e"></span>
+  </div>
+  <div id="bm-list"></div>
+</div>
 <!-- ── STATUS TAB ────────────────────────────────────────── -->
 <div id="tab-status" class="hidden">
   <div class="card">
@@ -1088,7 +1163,7 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
 <div class="footer">
   <center>&copy; 2026 by <a href="https://www.vid-pro.de" target=_new>VID-PRO</a> | 
   credits to <a href="https://github.com/Bambu-Research-Group/RFID-Tag-Guide" target=_new>RFID-Tag-Guide</a> |
-  Library from <a href="https://github.com/queengooborg/Bambu-Lab-RFID-Library" target=_new>Bambu-Lab-RFID-Library</a>
+  Library from <a href="https://github.com/queengooborg/Bambu-Lab-RFID-Library" target=_new>Bambu-Lab-RFID-Library</a> and <a href="https://bambuman.ee" target=_new>bambuman</a>
   </center>
 </div>
 <!-- /content -->
@@ -1098,14 +1173,163 @@ let curPath = '';
 let pathStack = [];
 
 function switchTab(name) {
-  ['wifi','github','local','status'].forEach(t => {
+  ['wifi','github','local','status','bambuman'].forEach(t => {
     document.getElementById('tab-'+t).classList.toggle('hidden', t!==name);
     document.getElementById('tab-'+t+'-btn').classList.toggle('active', t===name);
   });
   if(name==='github' && curPath==='' && document.getElementById('gh-tree').textContent.includes('Click')) githubNav('');
   if(name==='local')  loadLocal();
+  if(name==='bambuman') { loadBmList(); bmLoadCatalog(); }
   if(name==='status') loadStatus();
   if(name==='wifi')   loadWifiStatus();
+}
+
+
+// ── BambuMan Library ────────────────────────────────────────
+let bmCatalog = null;
+
+function bmSync() {
+  const btn = document.getElementById('bm-sync-btn');
+  const st  = document.getElementById('bm-sync-status');
+  btn.disabled = true; btn.textContent = '\u23F3 Syncing\u2026';
+  st.innerHTML = '<div class=\"status info\">\u23F3 Downloading catalog from bambuman.ee (may take 30\u201360 s)\u2026</div>';
+  fetch('/api/bm/sync', {method:'POST'})
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok) {
+        st.innerHTML = '<div class=\"status ok\">\u2713 Synced ' + d.count + ' tags</div>';
+        bmCatalog = null;
+        bmLoadCatalog();
+      } else {
+        st.innerHTML = '<div class=\"status err\">\u2717 ' + (d.error||'Sync failed') + '</div>';
+      }
+    })
+    .catch(e => { st.innerHTML = '<div class=\"status err\">Request failed: ' + e + '</div>'; })
+    .finally(() => { btn.disabled=false; btn.innerHTML='\u1F504 Sync Catalog'; });
+}
+
+function bmLoadCatalog() {
+  fetch('/api/bm/catalog')
+    .then(r => { if (!r.ok) throw new Error('not synced'); return r.json(); })
+    .then(data => {
+      bmCatalog = data;
+      const mats = [...new Set(data.map(e=>e.m))].sort();
+      const sel = document.getElementById('bm-mat-filter');
+      sel.innerHTML = '<option value="">All Materials (' + data.length + ')</option>' +
+        mats.map(m => '<option value=\"'+m+'\">'+m+'</option>').join('');
+      document.getElementById('bm-catalog-info').textContent =
+        data.length + ' entries \u2014 ready to search';
+      bmSearch();
+    })
+    .catch(() => {
+      document.getElementById('bm-catalog-info').textContent =
+        'Not synced yet \u2014 click Sync Catalog';
+    });
+}
+
+function bmSearch() {
+  if (!bmCatalog) return;
+  const mat  = document.getElementById('bm-mat-filter').value;
+  const name = document.getElementById('bm-name-filter').value.toLowerCase().trim();
+  let filtered = bmCatalog;
+  if (mat)  filtered = filtered.filter(e => e.m === mat);
+  if (name) filtered = filtered.filter(e =>
+    e.t.toLowerCase().includes(name) ||
+    e.c.toLowerCase().includes(name) ||
+    e.u.toLowerCase().includes(name));
+  document.getElementById('bm-result-count').textContent = filtered.length + ' results';
+  const el = document.getElementById('bm-results');
+  if (!filtered.length) {
+    el.innerHTML = '<div class=\"status info\">No matches.</div>'; return;
+  }
+  const show = filtered.slice(0, 100);
+  el.innerHTML =
+    '<table style=\"width:100%;border-collapse:collapse\">' +
+    '<thead><tr style=\"color:#8b949e;border-bottom:1px solid #30363d\">' +
+    '<th style=\"text-align:left;padding:3px 5px\">UID</th>' +
+    '<th style=\"text-align:left;padding:3px 5px\">Mat</th>' +
+    '<th style=\"text-align:left;padding:3px 5px\">Type</th>' +
+    '<th style=\"text-align:left;padding:3px 5px\">Color</th>' +
+    '<th style=\"padding:3px 5px\"></th></tr></thead><tbody>' +
+    show.map(e => {
+      const saved = '/BM/' + e.u + '.bin';
+      return '<tr style=\"border-bottom:1px solid #21262d\">' +
+        '<td style=\"padding:3px 5px;font-family:monospace\">' + e.u + '</td>' +
+        '<td style=\"padding:3px 5px\">' + e.m + '</td>' +
+        '<td style=\"padding:3px 5px\">' + e.t + '</td>' +
+        '<td style=\"padding:3px 5px\">' + e.c + '</td>' +
+        '<td style=\"padding:3px 5px;white-space:nowrap\">' +
+        '<button class=\"btn\" style=\"padding:2px 7px;font-size:.75em;margin-right:3px\"' +
+        'onclick=\"bmFetchUid(\'' + e.u + '\')\">' +
+        '\u2B07 Fetch</button>' +
+        '<button class=\"btn\" style=\"padding:2px 7px;font-size:.75em;background:#2196F3;color:#fff\"' +
+        'onclick=\"writeTagFromFile(\' + saved + \')\">' +
+        '\u270F Write</button>' +
+        '</td></tr>';
+    }).join('') + '</tbody></table>' +
+    (filtered.length > 100
+      ? '<div style=\"font-size:.8em;color:#8b949e;padding:4px\">Showing 100 of ' +
+        filtered.length + ' \u2014 refine search to see more.</div>'
+      : '');
+}
+
+function bmFetchUid(uid) {
+  document.getElementById('bm-uid').value = uid;
+  bmFetch();
+}
+
+function bmFetch() {
+  const uid = document.getElementById('bm-uid').value.trim().toUpperCase();
+  const st  = document.getElementById('bm-status');
+  if (!uid) { st.innerHTML = '<div class=\"status err\">Enter a UID first.</div>'; return; }
+  st.innerHTML = '<div class=\"status info\">\u23F3 Fetching from bambuman.ee\u2026</div>';
+  fetch('/api/bm/fetch?uid=' + encodeURIComponent(uid))
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok) {
+        st.innerHTML = '<div class=\"status ok\">\u2713 Saved as ' + d.path + ' (' + d.size + ' B)</div>';
+        loadBmList();
+      } else {
+        st.innerHTML = '<div class=\"status err\">\u2717 ' + d.error + '</div>';
+      }
+    })
+    .catch(e => { st.innerHTML = '<div class=\"status err\">Request failed: ' + e + '</div>'; });
+}
+
+function loadBmList() {
+  fetch('/api/files?dir=/BM')
+    .then(r => r.json())
+    .then(d => {
+      const el    = document.getElementById('bm-list');
+      const cnt   = document.getElementById('bm-count');
+      const files = (d.entries || []).filter(e => !e.isDir);
+      cnt.textContent = '(' + files.length + ')';
+      if (!files.length) {
+        el.innerHTML = '<div class=\"status info\">No files yet.</div>';
+        return;
+      }
+      el.innerHTML = files.map(e => {
+        const sz  = e.size < 1024 ? e.size + ' B' : (e.size/1024).toFixed(1) + ' KB';
+        const fp  = '/BM/' + e.name;
+        return '<div class=\"file-entry\">' +
+               '<span class=\"file-name\">&#128222; ' + e.name + '</span>' +
+               '<span class=\"file-size\">' + sz + '</span>' +
+               '<button class=\"btn\" style=\"padding:4px 8px;font-size:.75em;background:#2196F3;color:#fff;margin-right:4px\"' +
+               'onclick=\"writeTagFromFile(\' + fp + \')\">' +
+               '&#9997; Write</button>' +
+               '<button class=\"btn btn-danger\" style=\"padding:4px 8px;font-size:.75em\"' +
+               'onclick=\"bmDelFile(\' + e.name + \')\">' +
+               '&#128465;</button></div>';
+      }).join('');
+    })
+    .catch(() => {});
+}
+
+function bmDelFile(name) {
+  if (!confirm('Delete /BM/' + name + '?')) return;
+  fetch('/api/delete', {method:'POST', headers:{'Content-Type':'application/json'},
+                        body: JSON.stringify({file: '/BM/' + name})})
+    .then(() => loadBmList());
 }
 
 // ── WiFi ────────────────────────────────────────────────────
@@ -1402,7 +1626,8 @@ void apiStatus() {
   doc["selected_dump"] = String(selectedDumpPath);
   static const char* stateNames[] = {
     "MAIN_MENU","READ_TAG","SHOW_TAG","CLONE_SRC","CLONE_TGT",
-    "DUMP_SELECT","DUMP_WRITE","WIFI_INFO","GH_BROWSE","GH_DOWNLOAD"
+    "DUMP_SELECT","DUMP_WRITE","WIFI_INFO","GH_BROWSE","GH_DOWNLOAD",
+    "BM_BROWSE","BM_DOWNLOAD","BM_CAT_BROWSE"
   };
   doc["app_state"] = stateNames[(int)appState];
 
@@ -1787,6 +2012,260 @@ void apiUploadDone() {
   httpServer.send(200, "application/json", out);
 }
 
+// ── BambuMan catalog sync helpers ────────────────────────────
+static bool bmReadExact(WiFiClient* s, uint8_t* buf, int n) {
+  int got = 0;
+  unsigned long t0 = millis();
+  while (got < n) {
+    if (!s->connected() && !s->available()) return false;
+    int r = s->readBytes(buf + got, n - got);
+    if (r > 0) { got += r; t0 = millis(); }
+    else if (millis() - t0 > 10000) return false;
+    else { delay(2); yield(); }
+  }
+  return true;
+}
+static void bmSkipBytes(WiFiClient* s, int n) {
+  uint8_t tmp[64];
+  while (n > 0) {
+    int c = min(n, (int)sizeof(tmp));
+    if (!bmReadExact(s, tmp, c)) return;
+    n -= c;
+  }
+}
+
+// Returns URL of today's (or recent) bambuman.ee daily ZIP
+String bmFindZipUrl() {
+  struct tm t;
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  if (!getLocalTime(&t, 8000)) { DBGLN("[BM] NTP failed"); return ""; }
+  for (int i = 0; i < 7; i++) {
+    struct tm tt = t; tt.tm_mday -= i; mktime(&tt);
+    char url[80];
+    snprintf(url, sizeof(url),
+      "https://bambuman.ee/files/data_%04d-%02d-%02d.zip",
+      tt.tm_year+1900, tt.tm_mon+1, tt.tm_mday);
+    HTTPClient hc; hc.begin(url);
+    hc.addHeader("User-Agent","Mozilla/5.0 (Windows NT 10.0; Win64) BambuTagger/1.0");
+    int code = hc.sendRequest("HEAD"); hc.end();
+    DBGF("[BM] probe %s -> %d\n", url, code);
+    if (code == 200) return String(url);
+  }
+  return "";
+}
+
+// POST /api/bm/sync – download ZIP central directory, build /BM/catalog.json
+void apiBmSync() {
+  if (!WiFi.isConnected()) {
+    httpServer.send(503,"application/json","{\"error\":\"No WiFi\"}"); return;
+  }
+
+  // ── 1. Find ZIP URL ──────────────────────────────────────
+  String zipUrl = bmFindZipUrl();
+  if (zipUrl.isEmpty()) {
+    httpServer.send(503,"application/json","{\"error\":\"ZIP URL not found\"}"); return;
+  }
+  DBGF("[BM] ZIP: %s\n", zipUrl.c_str());
+
+  // ── 2. HEAD → file size ──────────────────────────────────
+  long fileSize = 0;
+  {
+    HTTPClient hc; hc.begin(zipUrl);
+    hc.addHeader("User-Agent","Mozilla/5.0 (Windows NT 10.0; Win64) BambuTagger/1.0");
+    hc.sendRequest("HEAD"); fileSize = hc.getSize(); hc.end();
+  }
+  if (fileSize <= 0) {
+    httpServer.send(503,"application/json","{\"error\":\"Cannot get ZIP size\"}"); return;
+  }
+  DBGF("[BM] ZIP size: %ld\n", fileSize);
+
+  // ── 3. Fetch last 512 B to find EOCD ─────────────────────
+  uint8_t tail[512] = {};
+  {
+    long ts = fileSize - 512;
+    HTTPClient hc; hc.begin(zipUrl);
+    hc.addHeader("User-Agent","Mozilla/5.0 (Windows NT 10.0; Win64) BambuTagger/1.0");
+    hc.addHeader("Range","bytes="+String(ts)+"-");
+    hc.GET();
+    WiFiClient* s = hc.getStreamPtr();
+    int got=0; unsigned long t0=millis();
+    while(got<512 && millis()-t0<12000) {
+      int r=s->readBytes(tail+got,512-got);
+      if(r>0){got+=r;t0=millis();}else delay(10);
+    }
+    hc.end();
+    if(got<22){
+      httpServer.send(503,"application/json","{\"error\":\"Short ZIP tail\"}"); return;
+    }
+  }
+
+  // ── 4. Parse EOCD (PK\x05\x06) ───────────────────────────
+  long cd_offset=-1, cd_size=-1;
+  for(int i=510;i>=0;i--) {
+    if(tail[i]==0x50&&tail[i+1]==0x4B&&tail[i+2]==0x05&&tail[i+3]==0x06) {
+      cd_size  =(long)tail[i+12]|((long)tail[i+13]<<8)|((long)tail[i+14]<<16)|((long)tail[i+15]<<24);
+      cd_offset=(long)tail[i+16]|((long)tail[i+17]<<8)|((long)tail[i+18]<<16)|((long)tail[i+19]<<24);
+      break;
+    }
+  }
+  if(cd_offset<0||cd_size<=0) {
+    httpServer.send(503,"application/json","{\"error\":\"EOCD not found\"}"); return;
+  }
+  DBGF("[BM] CD offset=%ld size=%ld\n", cd_offset, cd_size);
+
+  // ── 5. Stream central directory, parse entries ────────────
+  if(!FFat.exists("/BM")) FFat.mkdir("/BM");
+  File outF = FFat.open("/BM/catalog.json","w");
+  if(!outF) {
+    httpServer.send(503,"application/json","{\"error\":\"Cannot write catalog\"}"); return;
+  }
+
+  {
+    HTTPClient hc; hc.begin(zipUrl);
+    hc.addHeader("User-Agent","Mozilla/5.0 (Windows NT 10.0; Win64) BambuTagger/1.0");
+    hc.addHeader("Range","bytes="+String(cd_offset)+"-"+String(cd_offset+cd_size-1));
+    hc.setTimeout(90000);
+    int code = hc.GET();
+    if(code!=200&&code!=206) {
+      outF.close(); hc.end();
+      httpServer.send(503,"application/json","{\"error\":\"CD fetch failed: "+String(code)+"\"}"); return;
+    }
+    WiFiClient* stream = hc.getStreamPtr();
+
+    uint8_t hdr[46]; uint8_t fname[280];
+    int count=0; bool first=true; long remaining=cd_size;
+    outF.print("[");
+
+    while(remaining>=46) {
+      if(!bmReadExact(stream,hdr,46)) break;
+      remaining-=46;
+      if(hdr[0]!=0x50||hdr[1]!=0x4B||hdr[2]!=0x01||hdr[3]!=0x02) break;
+      uint16_t fnLen=(uint16_t)hdr[28]|((uint16_t)hdr[29]<<8);
+      uint16_t exLen=(uint16_t)hdr[30]|((uint16_t)hdr[31]<<8);
+      uint16_t cmLen=(uint16_t)hdr[32]|((uint16_t)hdr[33]<<8);
+
+      int fnRead=min((int)fnLen,279);
+      if(!bmReadExact(stream,fname,fnRead)) break;
+      fname[fnRead]=0;
+      remaining-=fnLen;
+      if(fnLen>fnRead) { bmSkipBytes(stream,fnLen-fnRead); remaining-=(fnLen-fnRead); }
+      if(exLen>0) { bmSkipBytes(stream,exLen); remaining-=exLen; }
+      if(cmLen>0) { bmSkipBytes(stream,cmLen); remaining-=cmLen; }
+
+      String path=String((char*)fname);
+      if(!path.endsWith("/data.bin")) continue;
+
+      // Parse Material/Type/Color/UID/data.bin
+      int s0=path.indexOf('/');
+      int s1=s0>=0?path.indexOf('/',s0+1):-1;
+      int s2=s1>=0?path.indexOf('/',s1+1):-1;
+      int s3=s2>=0?path.indexOf('/',s2+1):-1;
+      if(s0<0||s1<0||s2<0||s3<0) continue;
+      String mat=path.substring(0,s0);
+      String typ=path.substring(s0+1,s1);
+      String col=path.substring(s1+1,s2);
+      String uid=path.substring(s2+1,s3);
+      if(uid.length()<4||uid.length()>12) continue;
+      mat.replace("\"","\\\""); typ.replace("\"","\\\"");
+      col.replace("\"","\\\""); uid.replace("\"","\\\"");
+
+      if(!first) outF.print(",");
+      first=false;
+      outF.print("{\"u\":\""); outF.print(uid);
+      outF.print("\",\"m\":\""); outF.print(mat);
+      outF.print("\",\"t\":\""); outF.print(typ);
+      outF.print("\",\"c\":\""); outF.print(col);
+      outF.print("\"}");
+      count++;
+      if(count%50==0) yield();
+    }
+    outF.print("]");
+    outF.close();
+    hc.end();
+    DBGF("[BM] Catalog: %d entries\n", count);
+    String resp="{\"ok\":true,\"count\":"+String(count)+"}";
+    httpServer.send(200,"application/json",resp);
+  }
+}
+
+// GET /api/bm/catalog – serve /BM/catalog.json
+void apiBmCatalog() {
+  if(!FFat.exists("/BM/catalog.json")) {
+    httpServer.send(404,"application/json","{\"error\":\"Not synced yet\"}"); return;
+  }
+  File f=FFat.open("/BM/catalog.json","r");
+  if(!f) { httpServer.send(500,"application/json","{\"error\":\"Open failed\"}"); return; }
+  httpServer.streamFile(f,"application/json");
+  f.close();
+}
+
+// ── BambuMan per-tag download (/api/bm/fetch?uid=XXXXXXXX) ───
+void apiBmFetch() {
+  String uid = httpServer.arg("uid");
+  uid.trim();
+  uid.toUpperCase();
+  DBGF("[HTTP]  GET /api/bm/fetch  uid=%s\n", uid.c_str());
+
+  DynamicJsonDocument resp(256);
+  auto fail = [&](int hcode, const char* msg) {
+    resp["ok"] = false;
+    resp["error"] = msg;
+    String out; serializeJson(resp, out);
+    httpServer.send(hcode, "application/json", out);
+  };
+
+  if (uid.length() < 4) { fail(400, "uid param required (min 4 hex chars)"); return; }
+  if (WiFi.status() != WL_CONNECTED) { fail(503, "WiFi not connected"); return; }
+
+  String url = "https://bambuman.ee/api/tags/" + uid + "/data.bin";
+  DBGF("[BM]  Fetching %s\n", url.c_str());
+
+  WiFiClientSecure wcs;
+  wcs.setInsecure();
+  HTTPClient http;
+  http.begin(wcs, url);
+  http.addHeader("User-Agent", "Mozilla/5.0 (compatible; BambuTagger/1.0; ESP32)");
+  http.addHeader("Accept",     "application/octet-stream");
+  int code = http.GET();
+
+  if (code != 200) {
+    DBGF("[BM]  HTTP %d\n", code);
+    const char* msg = code == 404 ? "UID not found on bambuman.ee"
+                    : code == 403 ? "Blocked by Cloudflare (try with your browser)"
+                    : ("bambuman.ee HTTP " + String(code)).c_str();
+    fail(code == 404 ? 404 : 502, msg);
+    http.end(); return;
+  }
+
+  int totalSize = http.getSize();
+  if (totalSize > 0 && totalSize != DUMP_SIZE) {
+    fail(422, ("Unexpected file size: " + String(totalSize)).c_str());
+    http.end(); return;
+  }
+
+  if (!FFat.exists("/BM")) FFat.mkdir("/BM");
+  String savePath = "/BM/" + uid + ".bin";
+  File f = FFat.open(savePath, "w");
+  if (!f) { fail(500, "FFat open failed"); http.end(); return; }
+
+  int written = http.writeToStream(&f);
+  f.close();
+  http.end();
+
+  if (written != DUMP_SIZE) {
+    FFat.remove(savePath);
+    fail(500, ("Incomplete write: " + String(written) + "/" + String(DUMP_SIZE)).c_str());
+    return;
+  }
+
+  DBGF("[BM]  Saved %s (%d bytes)\n", savePath.c_str(), written);
+  resp["ok"]   = true;
+  resp["path"] = savePath;
+  resp["size"] = written;
+  String out; serializeJson(resp, out);
+  httpServer.send(200, "application/json", out);
+}
+
 // ── Write tag from FAT dump via REST (/api/writetag) ───────────────────────
 void apiWriteTag() {
   DBGLN("[HTTP]  POST /api/writetag");
@@ -1836,6 +2315,9 @@ void setupHTTPServer() {
   httpServer.on("/api/delete", HTTP_POST, apiDelete);
   httpServer.on("/api/upload", HTTP_POST, apiUploadDone, apiUploadHandler);
   httpServer.on("/api/writetag", HTTP_POST, apiWriteTag);
+  httpServer.on("/api/bm/fetch",   HTTP_GET,  apiBmFetch);
+  httpServer.on("/api/bm/sync",    HTTP_POST, apiBmSync);
+  httpServer.on("/api/bm/catalog", HTTP_GET,  apiBmCatalog);
   httpServer.enableCORS(true);
   httpServer.begin();
   Serial.println("HTTP server started.");
@@ -2474,6 +2956,587 @@ void enterWifiInfo() {
 // ──────────────────────────────────────────────────────────────
 //  Main-menu encoder handler  (non-blocking)
 // ──────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────
+//  BambuMan catalog OLED browser  (4-level: Mat→Type→Color→UID)
+// ──────────────────────────────────────────────────────────────
+
+// Stream-parse /BM/catalog.json and populate bmCatEntries[] for current level.
+// Levels: 0=material, 1=type, 2=color, 3=uid.
+// Returns true even on empty result (catalog exists), false if file missing.
+bool bmCatLoadLevel() {
+  bmCatCount = 0;
+  File f = FFat.open("/BM/catalog.json", "r");
+  if (!f) return false;
+
+  // Skip to opening '['
+  while (f.available()) { if (f.read() == '[') break; }
+
+  char seen[BM_MAX_ENTRIES][32];
+  int seenCount = 0;
+  StaticJsonDocument<256> doc;
+  char obj[192];
+
+  while (f.available() && bmCatCount < BM_MAX_ENTRIES) {
+    // Skip to next '{'
+    char c;
+    do {
+      if (!f.available()) goto bmLoadDone;
+      c = f.read();
+    } while (c != '{');
+
+    // Read object into buffer
+    obj[0] = '{';
+    int i = 1, depth = 1;
+    while (f.available() && i < 190) {
+      c = f.read();
+      obj[i++] = c;
+      if (c == '{') depth++;
+      else if (c == '}') { depth--; if (depth == 0) break; }
+    }
+    obj[i] = '\0';
+
+    doc.clear();
+    if (deserializeJson(doc, obj)) continue;
+
+    const char* m  = doc["m"] | "";
+    const char* t  = doc["t"] | "";
+    const char* co = doc["c"] | "";
+    const char* u  = doc["u"] | "";
+
+    if (bmCatLevel >= 1 && strcmp(m,  bmCatMat)   != 0) continue;
+    if (bmCatLevel >= 2 && strcmp(t,  bmCatType)  != 0) continue;
+    if (bmCatLevel >= 3 && strcmp(co, bmCatColor) != 0) continue;
+
+    const char* val = (bmCatLevel == 0) ? m :
+                      (bmCatLevel == 1) ? t :
+                      (bmCatLevel == 2) ? co : u;
+    if (!val || val[0] == '\0') continue;
+
+    // Deduplicate levels 0-2
+    if (bmCatLevel < 3) {
+      bool dup = false;
+      for (int j = 0; j < seenCount; j++)
+        if (strcmp(seen[j], val) == 0) { dup = true; break; }
+      if (dup) continue;
+      if (seenCount < BM_MAX_ENTRIES)
+        strncpy(seen[seenCount++], val, 31);
+    }
+
+    strncpy(bmCatEntries[bmCatCount].label, val, 31);
+    bmCatEntries[bmCatCount].label[31] = '\0';
+    bmCatCount++;
+  }
+  bmLoadDone:
+  f.close();
+  return true;
+}
+
+void drawBmCatBrowser() {
+  oledClear();
+
+  // ── Title bar ─────────────────────────────────────────────
+  oled.fillRect(0, 0, 128, 11, SH110X_WHITE);
+  oled.setTextColor(SH110X_BLACK);
+  oled.setTextSize(1);
+  oled.setTextWrap(false);
+  oled.setCursor(2, 2);
+
+  const char* lvlTitles[] = {
+    "BambuMan Mat.", "BambuMan Type",
+    "BambuMan Color", "BambuMan UIDs"
+  };
+  String title = lvlTitles[bmCatLevel];
+  if (title.length() > 20) title = title.substring(0, 19) + "~";
+  oled.print(title);
+  oled.setTextColor(SH110X_WHITE);
+
+  // Row 0: nav; Row 1 (level 0 only): [Sync Catalog]; rest: entries
+  // totalRows = bmCatCount + 1 (nav) + syncExtra (1 at level 0)
+  int syncExtra = (bmCatLevel == 0) ? 1 : 0;
+  int totalRows = bmCatCount + 1 + syncExtra;
+
+  // Hint when no catalog loaded yet
+  if (bmCatLevel == 0 && bmCatCount == 0) {
+    oled.setCursor(2, 54);
+    oled.setTextSize(1);
+    oled.print("No catalog-sync first");
+  }
+
+  for (int row = 0; row < 4; row++) {
+    int idx = bmCatScroll + row;
+    if (idx >= totalRows) break;
+
+    int y    = 13 + row * 13;
+    bool sel = (idx == bmCatSel);
+
+    String label;
+    if (idx == 0) {
+      label = (bmCatLevel == 0) ? "<< MENU" : "< BACK";
+    } else if (idx == 1 && bmCatLevel == 0) {
+      label = "> Sync Catalog";
+    } else {
+      int eIdx = idx - 1 - syncExtra;
+      if (eIdx < 0 || eIdx >= bmCatCount) break;
+      label = String(bmCatEntries[eIdx].label);
+      if (label.length() > 17) label = label.substring(0, 16) + "~";
+      String pfx = (bmCatLevel == 3) ? " " : " ";
+      label = pfx + label;
+    }
+
+    if (sel) {
+      oled.fillRect(0, y - 1, 128, 13, SH110X_WHITE);
+      oled.setTextColor(SH110X_BLACK);
+    } else {
+      oled.setTextColor(SH110X_WHITE);
+    }
+    oled.setTextSize(1);
+    oled.setCursor(2, y + 1);
+    oled.print(label);
+    oled.setTextColor(SH110X_WHITE);
+  }
+
+  // Scroll arrows
+  if (bmCatScroll > 0)           { oled.setCursor(120, 13); oled.print("^"); }
+  if (bmCatScroll + 4 < totalRows) { oled.setCursor(120, 55); oled.print("v"); }
+
+  oledFlush();
+}
+
+void enterBmCatBrowse(int level) {
+  bmCatLevel  = level;
+  bmCatSel    = 0;
+  bmCatScroll = 0;
+  appState = S_BM_CAT_BROWSE;
+
+  // Level 0: always open (sync row available even without catalog)
+  // Level >0: need WiFi + working catalog
+  if (level > 0 && WiFi.status() != WL_CONNECTED) {
+    showStatus2("BambuMan", "No WiFi!");
+    delay(1500);
+    appState = S_WIFI_INFO;
+    return;
+  }
+
+  bmCatCount = 0;
+  if (FFat.exists("/BM/catalog.json")) {
+    showStatus2("Loading", "BambuMan...");
+    ledScanPulse();
+    if (!bmCatLoadLevel() && level > 0) {
+      showStatus("BambuMan\nCatalog read\nfailed.\n\n[click]=menu");
+      appState = S_WIFI_INFO;
+      return;
+    }
+  }
+
+  ledSet(0, 0, 40);
+  drawBmCatBrowser();
+}
+
+// (Re-)enter the catalog browser at the given level; loads entries from FAT.
+// ── OLED-driven BambuMan catalog sync ─────────────────────────────────────
+// Mirrors apiBmSync() logic with progress shown on OLED.
+void bmOledSyncCatalog() {
+  if (WiFi.status() != WL_CONNECTED) {
+    showStatus2("BambuMan Sync", "No WiFi!");
+    delay(2000);
+    enterBmCatBrowse(0);
+    return;
+  }
+
+  // Step 1 – find ZIP URL
+  oledClear();
+  oled.fillRect(0, 0, 128, 11, SH110X_WHITE);
+  oled.setTextColor(SH110X_BLACK); oled.setCursor(2, 2); oled.print("BambuMan Sync");
+  oled.setTextColor(SH110X_WHITE); oled.setCursor(2, 16); oled.print("1/4 Find ZIP...");
+  oledFlush();
+  ledSet(0, 0, 80);
+
+  String zipUrl = bmFindZipUrl();
+  if (zipUrl.isEmpty()) {
+    showStatus2("BambuMan Sync", "ZIP not found");
+    delay(3000); enterBmCatBrowse(0); return;
+  }
+  DBGF("[BM] OLED sync ZIP: %s\n", zipUrl.c_str());
+
+  // Step 2 – HEAD → file size
+  oledClear();
+  oled.fillRect(0, 0, 128, 11, SH110X_WHITE);
+  oled.setTextColor(SH110X_BLACK); oled.setCursor(2, 2); oled.print("BambuMan Sync");
+  oled.setTextColor(SH110X_WHITE); oled.setCursor(2, 16); oled.print("2/4 Getting size...");
+  oledFlush();
+
+  long fileSize = 0;
+  {
+    HTTPClient hc; hc.begin(zipUrl);
+    hc.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64) BambuTagger/1.0");
+    hc.sendRequest("HEAD"); fileSize = hc.getSize(); hc.end();
+  }
+  if (fileSize <= 0) {
+    showStatus2("BambuMan Sync", "HEAD failed");
+    delay(3000); enterBmCatBrowse(0); return;
+  }
+
+  // Step 3 – fetch last 512 B, find EOCD
+  oledClear();
+  oled.fillRect(0, 0, 128, 11, SH110X_WHITE);
+  oled.setTextColor(SH110X_BLACK); oled.setCursor(2, 2); oled.print("BambuMan Sync");
+  oled.setTextColor(SH110X_WHITE); oled.setCursor(2, 16); oled.print("3/4 Read EOCD...");
+  oledFlush();
+
+  uint8_t tail[512] = {};
+  {
+    long ts = fileSize - 512;
+    HTTPClient hc; hc.begin(zipUrl);
+    hc.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64) BambuTagger/1.0");
+    hc.addHeader("Range", "bytes=" + String(ts) + "-");
+    hc.GET();
+    WiFiClient* s = hc.getStreamPtr();
+    int got = 0; unsigned long t0 = millis();
+    while (got < 512 && millis() - t0 < 12000) {
+      int r = s->readBytes(tail + got, 512 - got);
+      if (r > 0) { got += r; t0 = millis(); } else delay(10);
+    }
+    hc.end();
+    if (got < 22) {
+      showStatus2("BambuMan Sync", "Short tail");
+      delay(3000); enterBmCatBrowse(0); return;
+    }
+  }
+
+  long cd_offset = -1, cd_size = -1;
+  for (int i = 510; i >= 0; i--) {
+    if (tail[i]==0x50&&tail[i+1]==0x4B&&tail[i+2]==0x05&&tail[i+3]==0x06) {
+      cd_size  = (long)tail[i+12]|((long)tail[i+13]<<8)|((long)tail[i+14]<<16)|((long)tail[i+15]<<24);
+      cd_offset= (long)tail[i+16]|((long)tail[i+17]<<8)|((long)tail[i+18]<<16)|((long)tail[i+19]<<24);
+      break;
+    }
+  }
+  if (cd_offset < 0 || cd_size <= 0) {
+    showStatus2("BambuMan Sync", "EOCD not found");
+    delay(3000); enterBmCatBrowse(0); return;
+  }
+
+  // Step 4 – stream central directory → write /BM/catalog.json
+  oledClear();
+  oled.fillRect(0, 0, 128, 11, SH110X_WHITE);
+  oled.setTextColor(SH110X_BLACK); oled.setCursor(2, 2); oled.print("BambuMan Sync");
+  oled.setTextColor(SH110X_WHITE); oled.setCursor(2, 16); oled.print("4/4 Writing...");
+  oledFlush();
+  ledSet(255, 200, 0);  // yellow = writing
+
+  if (!FFat.exists("/BM")) FFat.mkdir("/BM");
+  File outF = FFat.open("/BM/catalog.json", "w");
+  if (!outF) {
+    showStatus2("BambuMan Sync", "FAT write fail");
+    delay(3000); enterBmCatBrowse(0); return;
+  }
+
+  int count = 0;
+  {
+    HTTPClient hc; hc.begin(zipUrl);
+    hc.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64) BambuTagger/1.0");
+    hc.addHeader("Range", "bytes=" + String(cd_offset) + "-" + String(cd_offset + cd_size - 1));
+    hc.setTimeout(90000);
+    int code = hc.GET();
+    if (code != 200 && code != 206) {
+      outF.close(); hc.end();
+      char cderr[15];
+      snprintf(cderr, sizeof(cderr), "CD err: %d", code);
+
+      showStatus2("BambuMan Sync", cderr);
+      delay(3000); enterBmCatBrowse(0); return;
+    }
+    WiFiClient* stream = hc.getStreamPtr();
+    uint8_t hdr[46]; uint8_t fname[280];
+    bool first = true; long remaining = cd_size;
+    outF.print("[");
+
+    while (remaining >= 46) {
+      if (!bmReadExact(stream, hdr, 46)) break;
+      remaining -= 46;
+      if (hdr[0]!=0x50||hdr[1]!=0x4B||hdr[2]!=0x01||hdr[3]!=0x02) break;
+      uint16_t fnLen = (uint16_t)hdr[28] | ((uint16_t)hdr[29] << 8);
+      uint16_t exLen = (uint16_t)hdr[30] | ((uint16_t)hdr[31] << 8);
+      uint16_t cmLen = (uint16_t)hdr[32] | ((uint16_t)hdr[33] << 8);
+
+      int fnRead = min((int)fnLen, 279);
+      if (!bmReadExact(stream, fname, fnRead)) break;
+      fname[fnRead] = 0;
+      remaining -= fnLen;
+      if (fnLen > fnRead) { bmSkipBytes(stream, fnLen - fnRead); remaining -= (fnLen - fnRead); }
+      if (exLen > 0) { bmSkipBytes(stream, exLen); remaining -= exLen; }
+      if (cmLen > 0) { bmSkipBytes(stream, cmLen); remaining -= cmLen; }
+
+      String path = String((char*)fname);
+      if (!path.endsWith("/data.bin")) continue;
+
+      int s0 = path.indexOf('/');
+      int s1 = s0 >= 0 ? path.indexOf('/', s0+1) : -1;
+      int s2 = s1 >= 0 ? path.indexOf('/', s1+1) : -1;
+      int s3 = s2 >= 0 ? path.indexOf('/', s2+1) : -1;
+      if (s0<0||s1<0||s2<0||s3<0) continue;
+      String mat = path.substring(0, s0);
+      String typ = path.substring(s0+1, s1);
+      String col = path.substring(s1+1, s2);
+      String uid = path.substring(s2+1, s3);
+      if (uid.length() < 4 || uid.length() > 12) continue;
+      mat.replace("\"","\\"); 
+      typ.replace("\"","\\");
+      col.replace("\"","\\"); 
+      uid.replace("\"","\\");
+
+      if (!first) outF.print(",");
+      first = false;
+      outF.print("{\"u\":\""); outF.print(uid);
+      outF.print("\",\"m\":\""); outF.print(mat);
+      outF.print("\",\"t\":\""); outF.print(typ);
+      outF.print("\",\"c\":\""); outF.print(col);
+      outF.print("\"}");
+      count++;
+
+      if (count % 200 == 0) {
+        oledClear();
+        oled.fillRect(0, 0, 128, 11, SH110X_WHITE);
+        oled.setTextColor(SH110X_BLACK); oled.setCursor(2, 2); oled.print("BambuMan Sync");
+        oled.setTextColor(SH110X_WHITE);
+        oled.setCursor(2, 16); oled.print("4/4 Writing...");
+        oled.setCursor(2, 30); oled.print(String(count) + " entries");
+        oledFlush();
+        yield();
+      }
+    }
+    outF.print("]");
+    outF.close();
+    hc.end();
+  }
+
+  DBGF("[BM] OLED sync done: %d entries\n", count);
+
+  // Success screen
+  ledFlash(0, 255, 0, 3);
+  oledClear();
+  oled.fillRect(0, 0, 128, 11, SH110X_WHITE);
+  oled.setTextColor(SH110X_BLACK); oled.setCursor(2, 2); oled.print("BambuMan Sync");
+  oled.setTextColor(SH110X_WHITE);
+  oled.setCursor(2, 16); oled.print("Done!");
+  oled.setCursor(2, 30); oled.print(String(count) + " entries");
+  oled.setCursor(2, 46); oled.setTextSize(1); oled.print("[click] to browse");
+  oledFlush();
+  ledSet(0, 0, 40);
+
+  unsigned long t0 = millis();
+  while (millis() - t0 < 10000) {
+    httpServer.handleClient(); encUpdate();
+    if (encGetClick() || encGetDelta() != 0) break;
+    delay(20);
+  }
+  enterBmCatBrowse(0);
+}
+
+// Fetch a dump from bambuman.ee by UID. Returns saved path or "" on error.
+// Caller must show confirmation / error feedback.
+String bmCatFetchUid(const String& uid) {
+  showStatus2("BambuMan", ("Fetching " + uid).c_str());
+  DBGF("[BM]  Catalog fetch uid=%s\n", uid.c_str());
+
+  statusLed.setPixelColor(0, statusLed.Color(255, 140, 0));
+  statusLed.show();
+
+  String url = "https://bambuman.ee/api/tags/" + uid + "/data.bin";
+  WiFiClientSecure wcs; wcs.setInsecure();
+  HTTPClient http;
+  http.begin(wcs, url);
+  http.addHeader("User-Agent", "Mozilla/5.0 (compatible; BambuTagger/1.0; ESP32)");
+  http.addHeader("Accept",     "application/octet-stream");
+  int code = http.GET();
+
+  if (code != 200) {
+    http.end();
+    DBGF("[BM]  HTTP %d\n", code);
+    String msg = "BambuMan\nHTTP " + String(code);
+    if (code == 404) msg = "BambuMan\nUID not found";
+    if (code == 403) msg = "BambuMan\nBlocked (CF)\nTry Web UI";
+    showStatus((msg + "\n\n[click]=back").c_str());
+    ledFlash(255, 0, 0, 2);
+    return "";
+  }
+
+  int totalSize = http.getSize();
+  if (totalSize > 0 && totalSize != DUMP_SIZE) {
+    http.end();
+    showStatus(("BambuMan\nBad size:\n" + String(totalSize) + "\n\n[click]=back").c_str());
+    ledFlash(255, 0, 0, 2);
+    return "";
+  }
+
+  if (!FFat.exists("/BM")) FFat.mkdir("/BM");
+  String savePath = "/BM/" + uid + ".bin";
+  File f = FFat.open(savePath, "w");
+  if (!f) {
+    http.end();
+    showStatus("BambuMan\nFFat write\nfailed!\n\n[click]=back");
+    ledFlash(255, 0, 0, 2);
+    return "";
+  }
+
+  int written = http.writeToStream(&f);
+  f.close(); http.end();
+
+  if (written != DUMP_SIZE) {
+    FFat.remove(savePath);
+    DBGF("[BM]  incomplete %d/%d\n", written, DUMP_SIZE);
+    showStatus(("BambuMan\nIncomplete:\n" + String(written) + "/" + String(DUMP_SIZE) + "\n\n[click]=back").c_str());
+    ledFlash(255, 0, 0, 2);
+    return "";
+  }
+
+  DBGF("[BM]  Saved %s\n", savePath.c_str());
+  return savePath;
+}
+
+// Handle encoder input while in S_BM_CAT_BROWSE
+void handleBmCatEncoder() {
+  int syncExtra = (bmCatLevel == 0) ? 1 : 0;
+  int totalRows = bmCatCount + 1 + syncExtra;
+  int d = encGetDelta();
+  if (d != 0) {
+    bmCatSel = constrain(bmCatSel + (d > 0 ? 1 : -1), 0, totalRows - 1);
+    if (bmCatSel < bmCatScroll)        bmCatScroll = bmCatSel;
+    if (bmCatSel >= bmCatScroll + 4)   bmCatScroll = bmCatSel - 3;
+    drawBmCatBrowser();
+    return;
+  }
+  if (!encGetClick()) return;
+
+  // ── Navigation row ────────────────────────────────────────
+  if (bmCatSel == 0) {
+    if (bmCatLevel == 0) { enterMainMenu(); return; }
+    int prev = bmCatLevel - 1;
+    if (prev <= 0) { bmCatMat[0]   = '\0'; bmCatType[0] = '\0'; bmCatColor[0] = '\0'; }
+    if (prev <= 1) { bmCatType[0]  = '\0'; bmCatColor[0] = '\0'; }
+    if (prev <= 2) { bmCatColor[0] = '\0'; }
+    enterBmCatBrowse(prev);
+    return;
+  }
+
+  // ── Sync Catalog row (level 0, row 1) ──────────────────────
+  if (bmCatLevel == 0 && bmCatSel == 1) {
+    bmOledSyncCatalog();
+    return;
+  }
+
+  // ── Entry row ─────────────────────────────────────────────
+  int eIdx = bmCatSel - 1 - syncExtra;
+  if (eIdx < 0 || eIdx >= bmCatCount) return;
+  const char* sel = bmCatEntries[eIdx].label;
+
+  if (bmCatLevel == 0) {
+    strncpy(bmCatMat, sel, 31); bmCatMat[31] = '\0';
+    enterBmCatBrowse(1);
+
+  } else if (bmCatLevel == 1) {
+    strncpy(bmCatType, sel, 31); bmCatType[31] = '\0';
+    enterBmCatBrowse(2);
+
+  } else if (bmCatLevel == 2) {
+    strncpy(bmCatColor, sel, 31); bmCatColor[31] = '\0';
+    enterBmCatBrowse(3);
+
+  } else {
+    // ── Level 3: fetch UID dump ────────────────────────────
+    String uid = String(sel);
+    String saved = bmCatFetchUid(uid);
+
+    if (saved.isEmpty()) {
+      // Error shown by bmCatFetchUid; wait for dismiss
+      unsigned long t0 = millis();
+      while (millis() - t0 < 10000) {
+        httpServer.handleClient(); encUpdate();
+        if (encGetClick() || encGetDelta() != 0) break;
+        delay(20);
+      }
+      enterBmCatBrowse(3);
+      return;
+    }
+
+    // Load dump + offer to write
+    File df = FFat.open(saved, FILE_READ);
+    if (df && df.size() == DUMP_SIZE) {
+      df.read(dumpBuf, DUMP_SIZE); df.close();
+      strncpy(selectedDumpPath, saved.c_str(), sizeof(selectedDumpPath) - 1);
+      selectedDumpPath[sizeof(selectedDumpPath) - 1] = '\0';
+
+      TagInfo preview; flatToTag(dumpBuf, &preview);
+      char msg[128];
+      snprintf(msg, sizeof(msg),
+               "BambuMan OK!\n%.16s\n%.16s\n\n[click]=WRITE\n[enc]=cancel",
+               preview.filamentType, preview.detailedType);
+      showStatus(msg);
+      ledFlash(0, 255, 0, 2);
+
+      unsigned long deadline = millis() + 15000;
+      while (millis() < deadline) {
+        httpServer.handleClient(); encUpdate();
+        if (encGetClick()) { appState = S_DUMP_WRITE; return; }
+        if (encGetDelta() != 0) break;
+        delay(20);
+      }
+    } else {
+      if (df) df.close();
+      showStatus(("Saved!\n" + saved + "\n\n[click]=back").c_str());
+      ledFlash(0, 255, 0, 2);
+      unsigned long t0 = millis();
+      while (millis() - t0 < 8000) {
+        httpServer.handleClient(); encUpdate();
+        if (encGetClick() || encGetDelta() != 0) break;
+        delay(20);
+      }
+    }
+    enterBmCatBrowse(3);
+  }
+}
+
+// ── Keep legacy scan-by-tag flow for programmatic use ─────────────────────────
+void processBmBrowse() {
+  // Pulsing blue while waiting for a tag
+  unsigned long deadline = millis() + 20000;
+  while (millis() < deadline) {
+    httpServer.handleClient();
+    encUpdate();
+    ledScanPulse();
+    if (encGetClick()) { enterMainMenu(); return; }
+
+    if (!rfid.PICC_IsNewCardPresent()) { delay(18); continue; }
+    if (!rfid.PICC_ReadCardSerial())   { delay(18); continue; }
+
+    String uid = "";
+    for (byte i = 0; i < rfid.uid.size; i++) {
+      if (rfid.uid.uidByte[i] < 0x10) uid += "0";
+      uid += String(rfid.uid.uidByte[i], HEX);
+    }
+    uid.toUpperCase();
+    rfid.PICC_HaltA(); rfid.PCD_StopCrypto1();
+
+    String saved = bmCatFetchUid(uid);
+    if (saved.isEmpty()) {
+      appState = S_WIFI_INFO; return;
+    }
+    ledFlash(0, 255, 0, 2);
+    showStatus(("BambuMan OK!\n\n" + saved + "\n\nPress to return.").c_str());
+    appState = S_WIFI_INFO;
+    return;
+  }
+  showStatus("BambuMan\nNo tag detected.\n\nPress to return.");
+  ledFlash(255, 0, 0, 2);
+  appState = S_WIFI_INFO;
+}
+
+// Menu entry point for "5 BambuMan Lib" — opens catalog browser
+void enterBmBrowse() {
+  enterBmCatBrowse(0);
+}
+
+
 void handleMenuEncoder() {
   int d = encGetDelta();
   if (d > 0) {
@@ -2496,7 +3559,8 @@ void handleMenuEncoder() {
         ghDepth = 0;
         enterGhBrowse("", true);
         break;
-      case 4: enterWifiInfo(); break;
+      case 4: enterBmBrowse(); break;
+      case 5: enterWifiInfo(); break;
     }
   }
 }
@@ -2886,6 +3950,16 @@ void loop() {
 
     case S_GH_DOWNLOAD:
       // handled inside handleGhBrowseEncoder; state self-exits
+      break;
+
+    // ── BambuMan fetch ────────────────────────────────────────
+    case S_BM_CAT_BROWSE:
+      handleBmCatEncoder();
+      break;
+
+    case S_BM_BROWSE:
+    case S_BM_DOWNLOAD:
+      processBmBrowse();
       break;
 
     default:
