@@ -68,7 +68,7 @@ jobs:
       - name: Compile sketch
         run: |
           arduino-cli compile \
-            --fqbn "esp32:esp32:esp32 \
+            --fqbn esp32:esp32:esp32 \
             --build-property build.partitions=defaultffat \
             --output-dir "${{ github.workspace }}/build" \
             --warnings none \
