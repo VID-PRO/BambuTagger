@@ -1244,7 +1244,7 @@ function loadLocal(dir) {
     entries.filter(e=>!e.isDir).sort((a,b)=>a.name.localeCompare(b.name)).forEach(e=>{
       const fp = localPath==='/' ? '/'+e.name : localPath+'/'+e.name;
       const sz = e.size<1024 ? e.size+' B' : (e.size/1024).toFixed(1)+' KB';
-      html += '<div class="file-entry"><span class="file-name">💾 '+e.name+'</span><span class="file-size">'+sz+'</span><button class="btn btn-danger" style="padding:4px 8px;font-size:.75em" onclick="delFile(\''+fp+'\')">🗑</button></div>';
+      html += '<div class="file-entry"><span class="file-name">💾 '+e.name+'</span><span class="file-size">'+sz+'</span><button class="btn" style="padding:4px 8px;font-size:.75em;background:#2196F3;color:#fff;margin-right:4px" onclick="writeTagFromFile(\''+fp+'\')">✍️ Write</button><button class="btn btn-danger" style="padding:4px 8px;font-size:.75em" onclick="delFile(\''+fp+'\')">🗑</button></div>';
     });
     if(!html) html = '<div class="status info">Empty folder.</div>';
     document.getElementById('local-list').innerHTML = html;
@@ -1258,6 +1258,40 @@ function delFile(name) {
   fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({name})})
   .then(()=>loadLocal());
+}
+
+function writeTagFromFile(path) {
+  showWriteModal('Connecting\u2026');
+  fetch('/api/writetag', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({path})})
+  .then(r=>r.json()).then(d=>{
+    if(!d.ok){ showWriteModal(null); alert('Error: '+d.message); return; }
+    showWriteModal('\ud83d\udce1 Place tag on RFID reader\u2026\n\u23f3 20 second window');
+    pollWriteState(0);
+  }).catch(e=>{ showWriteModal(null); alert('Request failed: '+e); });
+}
+
+function pollWriteState(n) {
+  if(n > 22) { showWriteModal(null); alert('Timed out waiting for tag.'); return; }
+  setTimeout(()=>{
+    fetch('/api/status').then(r=>r.json()).then(d=>{
+      if(d.app_state === 'DUMP_WRITE') { pollWriteState(n+1); return; }
+      showWriteModal(null);
+      alert(d.app_state === 'MAIN_MENU' ? 'Write complete \u2713' : 'Done (state: '+d.app_state+')');
+    }).catch(()=>pollWriteState(n+1));
+  }, 1000);
+}
+
+function showWriteModal(msg) {
+  let m = document.getElementById('write-modal');
+  if(!msg) { if(m) m.remove(); return; }
+  if(!m) {
+    m = document.createElement('div');
+    m.id = 'write-modal';
+    m.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.65);z-index:9999;display:flex;align-items:center;justify-content:center';
+    m.innerHTML='<div style="background:#1e1e2e;border:1px solid #444;border-radius:10px;padding:32px 40px;text-align:center;max-width:320px"><div id="write-modal-msg" style="white-space:pre-line;font-size:1.1em;color:#e0e0e0;margin-bottom:16px"></div><button class="btn btn-secondary" onclick="showWriteModal(null)">Cancel</button></div>';
+    document.body.appendChild(m);
+  }
+  document.getElementById('write-modal-msg').textContent = msg;
 }
 
 function handleDrop(e) {
@@ -1366,6 +1400,11 @@ void apiStatus() {
   doc["fat_total"] = (int)FFat.totalBytes();
   doc["fat_used"] = (int)FFat.usedBytes();
   doc["selected_dump"] = String(selectedDumpPath);
+  static const char* stateNames[] = {
+    "MAIN_MENU","READ_TAG","SHOW_TAG","CLONE_SRC","CLONE_TGT",
+    "DUMP_SELECT","DUMP_WRITE","WIFI_INFO","GH_BROWSE","GH_DOWNLOAD"
+  };
+  doc["app_state"] = stateNames[(int)appState];
 
   JsonObject ltObj = doc.createNestedObject("last_tag");
   tagInfoToJson(ltObj, &currentTag);
@@ -1748,6 +1787,40 @@ void apiUploadDone() {
   httpServer.send(200, "application/json", out);
 }
 
+// ── Write tag from FAT dump via REST (/api/writetag) ───────────────────────
+void apiWriteTag() {
+  DBGLN("[HTTP]  POST /api/writetag");
+  DynamicJsonDocument req(256);
+  deserializeJson(req, httpServer.arg("plain"));
+  String path = req["path"] | "";
+  DynamicJsonDocument resp(256);
+  if (path.isEmpty()) {
+    resp["ok"] = false;
+    resp["message"] = "path required";
+    String out; serializeJson(resp, out);
+    httpServer.send(400, "application/json", out);
+    return;
+  }
+  File f = FFat.open(path);
+  if (!f || f.size() != DUMP_SIZE) {
+    if (f) f.close();
+    resp["ok"] = false;
+    resp["message"] = "File not found or wrong size";
+    String out; serializeJson(resp, out);
+    httpServer.send(404, "application/json", out);
+    return;
+  }
+  f.read(dumpBuf, DUMP_SIZE);
+  f.close();
+  strncpy(selectedDumpPath, path.c_str(), sizeof(selectedDumpPath) - 1);
+  selectedDumpPath[sizeof(selectedDumpPath) - 1] = '\0';
+  appState = S_DUMP_WRITE;
+  resp["ok"] = true;
+  resp["message"] = "Place tag on RFID reader within 20 s";
+  String out; serializeJson(resp, out);
+  httpServer.send(200, "application/json", out);
+}
+
 void setupHTTPServer() {
   httpServer.on("/", HTTP_GET, []() {
     httpServer.send_P(200, "text/html", INDEX_HTML);
@@ -1762,6 +1835,7 @@ void setupHTTPServer() {
   httpServer.on("/api/files", HTTP_GET, apiFiles);
   httpServer.on("/api/delete", HTTP_POST, apiDelete);
   httpServer.on("/api/upload", HTTP_POST, apiUploadDone, apiUploadHandler);
+  httpServer.on("/api/writetag", HTTP_POST, apiWriteTag);
   httpServer.enableCORS(true);
   httpServer.begin();
   Serial.println("HTTP server started.");

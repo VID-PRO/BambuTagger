@@ -186,7 +186,8 @@ Fully navigable browser for the FAT file system.
 - **⬆ ..** row — click to go up one level (hidden at root).
 - **Refresh** button reloads the current directory.
 - **Upload** new files via drag-and-drop or file picker (`.bin` only) — files are placed in the currently browsed directory.
-- **Delete** any `.bin` file with the ✕ button (full path passed to the server).
+- **✍️ Write** any `.bin` file directly to an RFID tag: click the button, place a tag on the RC522 within 20 seconds.  A modal overlay shows progress and polls for completion.
+- **Delete** any `.bin` file with the 🗑 button (full path passed to the server).
 
 ### Tab 2 — Dumps
 - Browse the GitHub repository tree by folder path.
@@ -212,13 +213,14 @@ All endpoints return JSON unless noted.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/status` | WiFi mode, SSID, IP, selected dump path, FAT usage |
+| `GET` | `/api/status` | WiFi mode, SSID, IP, selected dump path, FAT usage, `app_state` |
 | `POST` | `/api/wifi` | `{"ssid":"…","pass":"…"}` — connect & save |
 | `GET` | `/api/scan` | Array of nearby SSIDs |
 | `GET` | `/api/list?path=…` | GitHub directory listing for `path` |
 | `POST` | `/api/download` | `{"url":"…","path":"…"}` — download raw file to FAT, filename auto-derived from `path` |
 | `GET` | `/api/files?dir=<path>` | Directory listing for `path` (default `/`); returns `{path, entries:[{name,isDir,size?}]}` |
 | `POST` | `/api/delete` | `{"file":"…"}` — delete a FAT file |
+| `POST` | `/api/writetag` | `{"path":"…"}` — load FAT dump and start tag-write (20 s window); poll `/api/status` `app_state` for completion |
 | `POST` | `/api/upload` | `multipart/form-data` field `file` — upload a `.bin` |
 | `GET` | `/api/token` | Returns `{"token":"ghp_…"}` (masked after first 4 chars) |
 | `POST` | `/api/token` | `{"token":"…"}` — save GitHub API token to NVS |
