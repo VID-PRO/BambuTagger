@@ -51,7 +51,7 @@
  *                  a blank magic card (preserving UID).
  *    • Write Dump– download a pre-scanned .bin from GitHub
  *                  via the built-in web interface or directly from 
- *                  the OLED menu, store on SPIFFS,
+ *                  the OLED menu, store on FAT,
  *                  then write to a card via encoder menu.
  * ============================================================
  */
@@ -84,7 +84,7 @@
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
-#include <SPIFFS.h>
+#include <FFat.h>
 #include "mbedtls/md.h"
 #include <vector>
 
@@ -247,7 +247,7 @@ enum AppState {
   S_DUMP_WRITE,
   S_WIFI_INFO,
   S_GH_BROWSE,   // GitHub OLED browser
-  S_GH_DOWNLOAD  // downloading dump file to SPIFFS
+  S_GH_DOWNLOAD  // downloading dump file to FAT
 };
 AppState appState = S_MAIN_MENU;
 
@@ -790,8 +790,20 @@ void drawTagInfo(const TagInfo* t, int page) {
 // ──────────────────────────────────────────────────────────────
 //  Draw dump-file selection list
 // ──────────────────────────────────────────────────────────────
-std::vector<String> dumpFiles;
-int dumpSel = 0;
+// ── FAT local file browser ─────────────────────────────────────
+#define FAT_MAX_ENTRIES 64
+struct FatEntry {
+  char name[48];   // last path segment only
+  bool isDir;
+};
+static FatEntry fatEntries[FAT_MAX_ENTRIES];
+static int fatCount   = 0;   // entries in current dir (excl. <BACK)
+static int fatSel     = 0;   // selected row (0 = <BACK when depth>0)
+static int fatScroll  = 0;   // top-visible row index
+#define FAT_MAX_DEPTH 8
+static String fatDirStack[FAT_MAX_DEPTH];  // ancestor paths
+static int    fatDepth   = 0;
+static String fatCurPath = "/";            // directory currently shown
 
 // ──────────────────────────────────────────────────────────────
 //  GitHub OLED browser state
@@ -811,29 +823,55 @@ static String ghStack[GH_MAX_DEPTH];  // path at each navigation depth
 static int ghDepth = 0;
 static String ghDlStatus;  // result message after download
 
-void drawDumpSelect() {
+// Total visible rows (always adds 1 nav row: "<< MENU" at root, "< BACK" in sub-dirs)
+inline int fatTotalRows() { return fatCount + 1; }
+
+void drawFatBrowser() {
   oledClear();
-  oledTitle("Select Dump");
+
+  // Title: last segment of current path, or "Select Dump" at root
+  String title = "Select Dump";
+  if (fatDepth > 0) {
+    int sl = fatCurPath.lastIndexOf('/');
+    title  = (sl >= 0 && sl < (int)fatCurPath.length() - 1)
+             ? fatCurPath.substring(sl + 1) : fatCurPath;
+    if (title.length() > 15) title = title.substring(0, 14) + "~";
+  }
+  oledTitle(title.c_str());
 
   oled.setTextSize(1);
   oled.setTextColor(SH110X_WHITE);
   oled.setTextWrap(false);
 
-  if (dumpFiles.empty()) {
+  int total = fatTotalRows();
+  if (total == 0) {
     oled.setCursor(0, 16);
-    oled.print("No dumps stored.\n");
-    oled.print("Use web interface\n");
-    oled.print("to download first.");
+    oled.print("(empty folder)");
+    oled.setCursor(0, 28);
+    oled.print("No .bin files here.");
   } else {
-    int scroll = max(0, dumpSel - 1);
-    for (int i = 0; i < 4 && (scroll + i) < (int)dumpFiles.size(); i++) {
-      int idx = scroll + i;
-      int y = 13 + i * 13;
-      bool sel = (idx == dumpSel);
-      String name = dumpFiles[idx];
-      // Strip leading slash
-      if (name[0] == '/') name = name.substring(1);
-      if (name.length() > 17) name = name.substring(0, 16) + "~";
+    // Keep selected row visible (2 rows context above if possible)
+    int scroll = max(0, fatSel - 2);
+    for (int i = 0; i < 4 && (scroll + i) < total; i++) {
+      int rowIdx = scroll + i;
+      int y      = 13 + i * 13;
+      bool sel   = (rowIdx == fatSel);
+
+      String label;
+      bool   isBack = (rowIdx == 0);  // row 0 is always nav row
+      if (isBack) {
+        label = (fatDepth > 0) ? "< BACK" : "<< MENU";
+      } else {
+        int ei = rowIdx - 1;  // nav row always at 0
+        if (fatEntries[ei].isDir) {
+          label = String("> ") + fatEntries[ei].name;
+        } else {
+          label = String(fatEntries[ei].name);
+          // Strip .bin for readability
+          if (label.endsWith(".bin")) label = label.substring(0, label.length() - 4);
+        }
+        if (label.length() > 18) label = label.substring(0, 17) + "~";
+      }
 
       if (sel) {
         oled.fillRect(0, y - 1, 128, 13, SH110X_WHITE);
@@ -842,7 +880,7 @@ void drawDumpSelect() {
         oled.setTextColor(SH110X_WHITE);
       }
       oled.setCursor(2, y + 1);
-      oled.print(name);
+      oled.print(label);
       oled.setTextColor(SH110X_WHITE);
     }
   }
@@ -856,7 +894,7 @@ String wifiSSID, wifiPass, ghToken;
 bool apMode = false;
 
 void wifiLoadCreds() {
-  DBGLN("[WiFi]  Loading credentials from SPIFFS...");
+  DBGLN("[WiFi]  Loading credentials from FFat...");
   prefs.begin("wifi", true);
   wifiSSID = prefs.getString("ssid", "");
   wifiPass = prefs.getString("pass", "");
@@ -1025,6 +1063,7 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
   <!-- File list card -->
   <div class="card">
     <h3>Stored Dump Files</h3>
+    <div class="breadcrumb" id="local-crumb"><a onclick="loadLocal('/')" style="cursor:pointer">Root</a></div>
     <div id="local-list"><div class="status info">Loading…</div></div>
     <button class="btn btn-secondary" style="margin-top:8px" onclick="loadLocal()">↻ Refresh</button>
   </div>
@@ -1168,23 +1207,49 @@ function dlDump(path, name) {
 }
 
 // ── Local files ────────────────────────────────────────────
-function loadLocal() {
-  fetch('/api/files').then(r=>r.json()).then(files=>{
-    if(!files.length){
+var localPath = '/';
+
+function loadLocal(dir) {
+  if(dir !== undefined) localPath = dir;
+  fetch('/api/files?dir='+encodeURIComponent(localPath))
+  .then(r=>r.json()).then(data=>{
+    let crumb = '<a onclick="loadLocal(\'\/\')" style="cursor:pointer">Root</a>';
+    if(localPath !== '/') {
+      const parts = localPath.split('/').filter(Boolean);
+      let cum = '';
+      parts.forEach((p,i)=>{
+        cum += '/'+p;
+        const cp = cum;
+        if(i < parts.length-1)
+          crumb += ' / <a onclick="loadLocal(\''+cp+'\')" style="cursor:pointer">'+p+'</a>';
+        else
+          crumb += ' / <strong>'+p+'</strong>';
+      });
+    }
+    document.getElementById('local-crumb').innerHTML = crumb;
+    const entries = data.entries || [];
+    if(!entries.length && localPath==='/'){
       document.getElementById('local-list').innerHTML='<div class="status info">No dumps yet. Use the Library tab.</div>';
       return;
     }
     let html = '';
-    files.forEach(f=>{
-      const name = f.name.startsWith('/')?f.name.substring(1):f.name;
-      html += `<div class="file-entry">
-        <span class="file-name">💾 ${name}</span>
-        <span class="file-size">${(f.size).toFixed(1)} B</span>
-        <button class="btn btn-danger" style="padding:4px 8px;font-size:.75em"
-          onclick="delFile('${f.name}')">🗑</button>
-      </div>`;
+    if(localPath !== '/'){
+      const par = localPath.lastIndexOf('/')>0 ? localPath.substring(0,localPath.lastIndexOf('/')) : '/';
+      html += '<div class="file-entry" onclick="loadLocal(\''+par+'\')" style="cursor:pointer"><span class="file-name">⬆ ..</span></div>';
+    }
+    entries.filter(e=>e.isDir).sort((a,b)=>a.name.localeCompare(b.name)).forEach(e=>{
+      const cp = localPath==='/' ? '/'+e.name : localPath+'/'+e.name;
+      html += '<div class="file-entry" onclick="loadLocal(\''+cp+'\')" style="cursor:pointer"><span class="file-name">📁 '+e.name+'</span></div>';
     });
+    entries.filter(e=>!e.isDir).sort((a,b)=>a.name.localeCompare(b.name)).forEach(e=>{
+      const fp = localPath==='/' ? '/'+e.name : localPath+'/'+e.name;
+      const sz = e.size<1024 ? e.size+' B' : (e.size/1024).toFixed(1)+' KB';
+      html += '<div class="file-entry"><span class="file-name">💾 '+e.name+'</span><span class="file-size">'+sz+'</span><button class="btn btn-danger" style="padding:4px 8px;font-size:.75em" onclick="delFile(\''+fp+'\')">🗑</button></div>';
+    });
+    if(!html) html = '<div class="status info">Empty folder.</div>';
     document.getElementById('local-list').innerHTML = html;
+  }).catch(e=>{
+    document.getElementById('local-list').innerHTML='<div class="status err">Error: '+e+'</div>';
   });
 }
 
@@ -1231,7 +1296,7 @@ function loadStatus() {
         <tr><td>IP</td><td>${d.ip}</td></tr>
         <tr><td>Mode</td><td>${d.ap_mode?'Access Point (AP)':'Station (STA)'}</td></tr>
         <tr><td>Free Heap</td><td>${d.heap} bytes</td></tr>
-        <tr><td>SPIFFS</td><td>${d.spiffs_used} / ${d.spiffs_total} bytes</td></tr>
+        <tr><td>FAT</td><td>${d.fat_used} / ${d.fat_total} bytes</td></tr>
         <tr><td>Selected dump</td><td>${d.selected_dump||'— none —'}</td></tr>
       </table>`;
 
@@ -1298,8 +1363,8 @@ void apiStatus() {
   doc["ip"] = apMode ? "192.168.4.1" : WiFi.localIP().toString();
   doc["ap_mode"] = apMode;
   doc["heap"] = (int)ESP.getFreeHeap();
-  doc["spiffs_total"] = (int)SPIFFS.totalBytes();
-  doc["spiffs_used"] = (int)SPIFFS.usedBytes();
+  doc["fat_total"] = (int)FFat.totalBytes();
+  doc["fat_used"] = (int)FFat.usedBytes();
   doc["selected_dump"] = String(selectedDumpPath);
 
   JsonObject ltObj = doc.createNestedObject("last_tag");
@@ -1442,6 +1507,69 @@ void apiList() {
   httpServer.send(200, "application/json", out);
 }
 
+// Build a descriptive FAT filename from a full GitHub repo path.
+// e.g. "PLA/PLA Basic/Black/3AD82DAD/dump.bin" -> "PLA-PLA_BASIC-BLACK-3AD82DAD.bin"
+// Build a FAT path that mirrors the GitHub repository directory structure.
+// Example: "PLA/PLA Basic/Black/3AD82DAD/dump.bin"
+//       →  "/PLA/PLA_BASIC/BLACK/3AD82DAD.bin"
+// The leaf GitHub folder (UID) becomes the .bin filename; the ancestor
+// directories are kept as FAT directory segments (uppercase, spaces→_).
+String buildDumpFilePath(String repoPath) {
+  // Remove URL encoding
+  repoPath.replace("%20", " ");
+  // Strip leading slash if present
+  if (repoPath.startsWith("/")) repoPath = repoPath.substring(1);
+  // Split into segments
+  std::vector<String> segs;
+  int start = 0;
+  for (int i = 0; i <= (int)repoPath.length(); i++) {
+    if (i == (int)repoPath.length() || repoPath[i] == '/') {
+      segs.push_back(repoPath.substring(start, i));
+      start = i + 1;
+    }
+  }
+  // Drop the last segment (the actual file: "dump.bin" / "dump.json")
+  if (segs.size() > 0) segs.pop_back();
+  if (segs.empty()) return "/dump.bin";
+  // Normalise each segment: uppercase, spaces→underscores
+  for (auto& seg : segs) {
+    seg.toUpperCase();
+    seg.replace(" ", "_");
+  }
+  // Join with "/" – result is "/TYPE/SUBTYPE/COLOR/UID.bin"
+  String result = "";
+  for (const auto& seg : segs) {
+    result += "/" + seg;
+  }
+  result += ".bin";
+  return result;
+}
+
+// Return the two innermost path segments for short OLED display.
+// "/PLA/PLA_BASIC/BLACK/3AD82DAD.bin" → "BLACK/3AD82DAD"
+String shortDumpName(const String& fullPath) {
+  String p = fullPath;
+  if (p.startsWith("/")) p = p.substring(1);
+  if (p.endsWith(".bin")) p = p.substring(0, p.length() - 4);
+  int last = p.lastIndexOf('/');
+  if (last > 0) {
+    int prev = p.lastIndexOf('/', last - 1);
+    p = (prev >= 0) ? p.substring(prev + 1) : p.substring(last + 1);
+  }
+  return p;  // e.g. "BLACK/3AD82DAD"
+}
+
+// Ensure all parent directories in a FAT path exist.
+// Required for LittleFS; harmless for legacy FFat.
+void ensureParentDirs(const String& path) {
+  for (int i = 1; i < (int)path.length(); i++) {
+    if (path[i] == '/') {
+      String dir = path.substring(0, i);
+      if (!FFat.exists(dir)) FFat.mkdir(dir);
+    }
+  }
+}
+
 void apiDownload() {
   DynamicJsonDocument req(256);
   deserializeJson(req, httpServer.arg("plain"));
@@ -1470,8 +1598,8 @@ void apiDownload() {
     return;
   }
 
-  // Sanitise filename for SPIFFS
-  fname.replace(" ", "_");
+  // Build descriptive filename from full repo path
+  fname = buildDumpFilePath(ghPath);
   if (!fname.startsWith("/")) fname = "/" + fname;
 
   WiFiClientSecure client;
@@ -1493,9 +1621,10 @@ void apiDownload() {
     return;
   }
 
-  File f = SPIFFS.open(fname, FILE_WRITE);
+  ensureParentDirs(fname);
+  File f = FFat.open(fname, FILE_WRITE);
   if (!f) {
-    fail("SPIFFS open failed");
+    fail("FFat open failed");
     http.end();
     return;
   }
@@ -1517,7 +1646,7 @@ void apiDownload() {
   http.end();
 
   if (written != DUMP_SIZE) {
-    SPIFFS.remove(fname);
+    FFat.remove(fname);
     fail(("Incomplete: " + String(written) + "/" + String(DUMP_SIZE)).c_str());
     return;
   }
@@ -1531,18 +1660,30 @@ void apiDownload() {
 
 void apiFiles() {
   DBGLN("[HTTP]  GET /api/files");
-  DynamicJsonDocument doc(2048);
-  JsonArray arr = doc.to<JsonArray>();
-  File root = SPIFFS.open("/");
-  File f = root.openNextFile();
-  while (f) {
-    String n = f.name();
-    if (!f.isDirectory() && n.endsWith(".bin")) {
-      JsonObject o = arr.createNestedObject();
-      o["name"] = n;
-      o["size"] = (int)f.size();
+  String dir = httpServer.hasArg("dir") ? httpServer.arg("dir") : "/";
+  if (!dir.startsWith("/")) dir = "/" + dir;
+  if (dir.length() > 1 && dir.endsWith("/"))
+    dir = dir.substring(0, dir.length() - 1);
+  DynamicJsonDocument doc(4096);
+  JsonObject root = doc.to<JsonObject>();
+  root["path"] = dir;
+  JsonArray arr = root.createNestedArray("entries");
+  File d = FFat.open(dir);
+  if (d && d.isDirectory()) {
+    File f = d.openNextFile();
+    while (f) {
+      String fn = f.name();
+      int sl = fn.lastIndexOf('/');
+      String bn = (sl >= 0) ? fn.substring(sl + 1) : fn;
+      bool isDir = f.isDirectory();
+      if (isDir || bn.endsWith(".bin")) {
+        JsonObject o = arr.createNestedObject();
+        o["name"] = bn;
+        o["isDir"] = isDir;
+        if (!isDir) o["size"] = (int)f.size();
+      }
+      f = d.openNextFile();
     }
-    f = root.openNextFile();
   }
   String out;
   serializeJson(doc, out);
@@ -1556,7 +1697,7 @@ void apiDelete() {
   deserializeJson(doc, httpServer.arg("plain"));
   String name = doc["name"] | "";
   if (!name.startsWith("/")) name = "/" + name;
-  bool ok = !name.isEmpty() && SPIFFS.remove(name);
+  bool ok = !name.isEmpty() && FFat.remove(name);
   httpServer.send(200, "application/json",
                   ok ? "{\"success\":true}" : "{\"success\":false}");
 }
@@ -1581,7 +1722,7 @@ void apiUploadHandler() {
       safe += (isAlphaNumeric(c) || c == '_' || c == '-' || c == '.') ? c : '_';
     Serial.printf("Upload start: %s\n", safe.c_str());
     DBGF("[UPLOAD] Start: %s\n", safe.c_str());
-    uploadFile = SPIFFS.open(safe, FILE_WRITE);
+    uploadFile = FFat.open(safe, FILE_WRITE);
     uploadOk = (bool)uploadFile;
 
   } else if (upload.status == UPLOAD_FILE_WRITE) {
@@ -1601,7 +1742,7 @@ void apiUploadHandler() {
 void apiUploadDone() {
   DynamicJsonDocument doc(128);
   doc["success"] = uploadOk;
-  doc["message"] = uploadOk ? "File uploaded successfully." : "Upload failed – check filename / SPIFFS space.";
+  doc["message"] = uploadOk ? "File uploaded successfully." : "Upload failed â check filename / FAT space.";
   String out;
   serializeJson(doc, out);
   httpServer.send(200, "application/json", out);
@@ -1627,18 +1768,86 @@ void setupHTTPServer() {
 }
 
 // ──────────────────────────────────────────────────────────────
-//  SPIFFS dump file list helpers
+//  FAT dump file list helpers
 // ──────────────────────────────────────────────────────────────
-std::vector<String> listDumpFiles() {
-  std::vector<String> v;
-  File root = SPIFFS.open("/");
-  File f = root.openNextFile();
-  while (f) {
-    if (!f.isDirectory() && String(f.name()).endsWith(".bin"))
-      v.push_back(String(f.name()));
-    f = root.openNextFile();
+// ── FAT directory browser helpers ─────────────────────────────
+// Extract last path segment: "/PLA/BLACK/3AD.bin" -> "3AD.bin"
+static String fatLastSeg(const char* fp) {
+  String s(fp);
+  int sl = s.lastIndexOf('/');
+  return (sl >= 0) ? s.substring(sl + 1) : s;
+}
+
+// Load one directory level into fatEntries[]: dirs first, then .bin files.
+void fatLoadDir(const String& path) {
+  fatCount  = 0;
+  fatSel    = (fatDepth > 0) ? 0 : 0;  // 0 always; <BACK is virtual row 0
+  fatScroll = 0;
+  String p = path.isEmpty() ? "/" : path;
+
+  // Pass 1 – subdirectories
+  File dir = FFat.open(p);
+  if (!dir || !dir.isDirectory()) return;
+  File f = dir.openNextFile();
+  while (f && fatCount < FAT_MAX_ENTRIES) {
+    if (f.isDirectory()) {
+      String seg = fatLastSeg(f.name());
+      strncpy(fatEntries[fatCount].name, seg.c_str(), 47);
+      fatEntries[fatCount].name[47] = '\0';
+      fatEntries[fatCount].isDir    = true;
+      fatCount++;
+    }
+    f = dir.openNextFile();
   }
-  return v;
+  dir.close();
+
+  // Pass 2 – .bin files
+  dir = FFat.open(p);
+  f   = dir.openNextFile();
+  while (f && fatCount < FAT_MAX_ENTRIES) {
+    String n(f.name());
+    if (!f.isDirectory() && (n.endsWith(".bin") || fatLastSeg(f.name()).endsWith(".bin"))) {
+      String seg = fatLastSeg(f.name());
+      strncpy(fatEntries[fatCount].name, seg.c_str(), 47);
+      fatEntries[fatCount].name[47] = '\0';
+      fatEntries[fatCount].isDir    = false;
+      fatCount++;
+    }
+    f = dir.openNextFile();
+  }
+  dir.close();
+}
+
+// Navigate browser state to the parent dir of filePath and pre-select it.
+// Does NOT redraw – caller does that.
+void fatNavigateTo(const String& filePath) {
+  int last   = filePath.lastIndexOf('/');
+  String par = (last > 0) ? filePath.substring(0, last) : "/";
+  if (par.isEmpty()) par = "/";
+
+  fatDepth   = 0;
+  fatCurPath = "/";
+
+  if (par != "/") {
+    // Walk segments to build ancestor stack
+    for (int i = 1; i <= (int)par.length(); i++) {
+      if (i == (int)par.length() || par[i] == '/') {
+        if (fatDepth < FAT_MAX_DEPTH) fatDirStack[fatDepth++] = fatCurPath;
+        fatCurPath = par.substring(0, i);
+      }
+    }
+  }
+  fatLoadDir(fatCurPath);
+
+  // Try to pre-select the downloaded file
+  String target  = filePath.substring(last + 1);
+  bool  hasBack  = (fatDepth > 0);
+  for (int i = 0; i < fatCount; i++) {
+    if (!fatEntries[i].isDir && String(fatEntries[i].name) == target) {
+      fatSel = i + (hasBack ? 1 : 0);
+      break;
+    }
+  }
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -1668,7 +1877,7 @@ bool ghFetchDir(const String& repoPath) {
   HTTPClient http;
   http.begin(client, url);
   ghAddHeaders(http);
-  http.setTimeout(20000);
+  http.setTimeout(40000);
   int code = http.GET();
   if (code != 200) {
     DBGF("[GH]  HTTP error %d\n", code);
@@ -1800,7 +2009,7 @@ int ghParseJson(const uint8_t* jsonBytes, size_t jsonLen, uint8_t* outBuf) {
   return 0;
 }
 
-// Download a raw URL and save to SPIFFS.  If it's a JSON file, parse it to
+// Download a raw URL and save to FFat.  If it's a JSON file, parse it to
 // binary first and save as .bin.  Returns true on success.
 bool ghSaveFile(const String& rawUrl, const String& localName) {
   DBGF("[GH]  Downloading: %s -> %s\n", rawUrl.c_str(), localName.c_str());
@@ -1859,9 +2068,11 @@ bool ghSaveFile(const String& rawUrl, const String& localName) {
     }
 
     // Save binary
-    String savePath = "/" + localName;
+    String savePath = localName;
+    if (!savePath.startsWith("/")) savePath = "/" + savePath;
     if (!savePath.endsWith(".bin")) savePath += ".bin";
-    File f = SPIFFS.open(savePath, FILE_WRITE);
+    ensureParentDirs(savePath);
+    File f = FFat.open(savePath, FILE_WRITE);
     if (!f) return false;
     f.write(binBuf, DUMP_SIZE);
     f.close();
@@ -1875,9 +2086,11 @@ bool ghSaveFile(const String& rawUrl, const String& localName) {
       http.end();
       return false;
     }
-    String savePath = "/" + localName;
+    String savePath = localName;
+    if (!savePath.startsWith("/")) savePath = "/" + savePath;
     if (!savePath.endsWith(".bin")) savePath += ".bin";
-    File f = SPIFFS.open(savePath, FILE_WRITE);
+    ensureParentDirs(savePath);
+    File f = FFat.open(savePath, FILE_WRITE);
     if (!f) {
       http.end();
       return false;
@@ -1899,7 +2112,7 @@ bool ghSaveFile(const String& rawUrl, const String& localName) {
     f.close();
     http.end();
     if (written != DUMP_SIZE) {
-      SPIFFS.remove(savePath);
+      FFat.remove(savePath);
       DBGF("[GH]  Incomplete: %d/%d\n", written, DUMP_SIZE);
       return false;
     }
@@ -2103,23 +2316,8 @@ void handleGhBrowseEncoder() {
     return;
   }
 
-  // Build a safe local name: last path component, ensure .bin extension
-  String localName = fname;
-  // Prefix with parent folder name to avoid collisions
-  String p = String(entry.path);
-  int sl = p.lastIndexOf('/');
-  if (sl > 0) {
-    String folder = p.substring(0, sl);
-    int sl2 = folder.lastIndexOf('/');
-    String leafFolder = (sl2 >= 0) ? folder.substring(sl2 + 1) : folder;
-    leafFolder.replace(" ", "_");
-    localName = leafFolder + "_" + fname;
-  }
-  // Force .bin extension
-  if (localName.endsWith(".json"))
-    localName = localName.substring(0, localName.length() - 5) + ".bin";
-  if (!localName.endsWith(".bin"))
-    localName += ".bin";
+  // Build descriptive filename from full repo path
+  String localName = buildDumpFilePath(String(entry.path));
 
   // Show download screen
   appState = S_GH_DOWNLOAD;
@@ -2143,17 +2341,9 @@ void handleGhBrowseEncoder() {
     ledFlash(0, 255, 0, 3);
     ghDlStatus = "Saved: " + localName;
     DBGF("[GH]  Download OK: %s\n", localName.c_str());
-    showStatus2("Downloaded!", ("Use WriteDump\n" + localName.substring(0, 16)).c_str());
-    // Refresh SPIFFS file list
-    dumpFiles.clear();
-    File root = SPIFFS.open("/");
-    File ff = root.openNextFile();
-    while (ff) {
-      if (!ff.isDirectory() && String(ff.name()).endsWith(".bin"))
-        dumpFiles.push_back(String(ff.name()));
-      ff = root.openNextFile();
-    }
-    dumpSel = max(0, (int)dumpFiles.size() - 1);
+    showStatus2("Downloaded!", ("Use WriteDump\n" + shortDumpName(localName)).c_str());
+    // Pre-position FAT browser at the downloaded file (no redraw yet)
+    fatNavigateTo(localName);
   } else {
     ledFlash(255, 0, 0, 3);
     ghDlStatus = "Failed!";
@@ -2184,12 +2374,13 @@ void enterCloneSource() {
   showStatus("CLONE  Step 1/2\nPlace SOURCE tag\non reader\n\nPress to cancel");
 }
 
-void enterDumpSelect() {
-  DBGLN("[STATE] -> DUMP_SELECT");
-  appState = S_DUMP_SELECT;
-  dumpFiles = listDumpFiles();
-  dumpSel = 0;
-  drawDumpSelect();
+void enterFatBrowser() {
+  DBGLN("[STATE] -> FAT_BROWSE (S_DUMP_SELECT)");
+  appState   = S_DUMP_SELECT;
+  fatDepth   = 0;
+  fatCurPath = "/";
+  fatLoadDir("/");
+  drawFatBrowser();
 }
 
 void enterWifiInfo() {
@@ -2226,7 +2417,7 @@ void handleMenuEncoder() {
     switch (menuSel) {
       case 0: enterReadTag(); break;
       case 1: enterCloneSource(); break;
-      case 2: enterDumpSelect(); break;
+      case 2: enterFatBrowser(); break;
       case 3:
         ghDepth = 0;
         enterGhBrowse("", true);
@@ -2255,49 +2446,87 @@ void handleTagViewEncoder() {
 // ──────────────────────────────────────────────────────────────
 //  Dump-select encoder handler
 // ──────────────────────────────────────────────────────────────
-void handleDumpSelectEncoder() {
-  int d = encGetDelta();
-  if (d > 0 && dumpSel < (int)dumpFiles.size() - 1) {
-    dumpSel++;
-    drawDumpSelect();
+void handleFatBrowserEncoder() {
+  int d     = encGetDelta();
+  int total = fatTotalRows();
+
+  // Empty dir: any click goes back or to menu
+  if (total == 0) {
+    if (fatDepth > 0) {
+      if (encGetClick()) {
+        fatDepth--;
+        fatCurPath = fatDirStack[fatDepth];
+        fatLoadDir(fatCurPath);
+        drawFatBrowser();
+      }
+    } else {
+      if (encGetClick()) enterMainMenu();
+    }
+    return;
   }
-  if (d < 0 && dumpSel > 0) {
-    dumpSel--;
-    drawDumpSelect();
-  }
+
+  if (d > 0 && fatSel < total - 1) { fatSel++; drawFatBrowser(); }
+  if (d < 0 && fatSel > 0)         { fatSel--; drawFatBrowser(); }
 
   if (encGetClick()) {
-    if (dumpFiles.empty()) {
-      enterMainMenu();
+    bool isNavRow = (fatSel == 0);  // row 0 is always "<< MENU" or "< BACK"
+    int  ei       = fatSel - 1;     // nav row always at 0
+
+    if (isNavRow) {
+      if (fatDepth > 0) {
+        // Navigate up one level
+        fatDepth--;
+        fatCurPath = fatDirStack[fatDepth];
+        fatLoadDir(fatCurPath);
+        drawFatBrowser();
+      } else {
+        // At root — return to main menu
+        DBGLN("[DUMP]  << MENU from FAT browser root");
+        enterMainMenu();
+      }
       return;
     }
-    // Load dump & confirm
-    String path = dumpFiles[dumpSel];
-    strncpy(selectedDumpPath, path.c_str(), sizeof(selectedDumpPath) - 1);
 
-    if (!path.startsWith("/")) path = "/" + path;
+    if (fatEntries[ei].isDir) {
+      // Navigate into sub-directory
+      if (fatDepth < FAT_MAX_DEPTH)
+        fatDirStack[fatDepth++] = fatCurPath;
+      fatCurPath = (fatCurPath == "/")
+                   ? String("/") + fatEntries[ei].name
+                   : fatCurPath + "/" + fatEntries[ei].name;
+      fatLoadDir(fatCurPath);
+      drawFatBrowser();
+      return;
+    }
 
-    DBGF("[DUMP]  Loading file: %s\n", path.c_str());
-    File f = SPIFFS.open(path, FILE_READ);
+    // ── It's a .bin file – load it ────────────────────────────
+    String fullPath = (fatCurPath == "/")
+                      ? String("/") + fatEntries[ei].name
+                      : fatCurPath + "/" + fatEntries[ei].name;
+
+    strncpy(selectedDumpPath, fullPath.c_str(), sizeof(selectedDumpPath) - 1);
+    DBGF("[DUMP]  Loading file: %s\n", fullPath.c_str());
+
+    File f = FFat.open(fullPath, FILE_READ);
     if (!f || f.size() != DUMP_SIZE) {
       DBGF("[DUMP]  Bad file: size=%u expected=%u\n",
            f ? (unsigned)f.size() : 0, DUMP_SIZE);
       showStatus("Bad dump file!\n\nPress to return");
-      appState = S_WIFI_INFO;  // re-use the "press to go back" state
+      appState = S_WIFI_INFO;
       return;
     }
     f.read(dumpBuf, DUMP_SIZE);
     f.close();
     DBGLN("[DUMP]  File loaded OK.");
 
-    // Parse so we can show what we're about to write
+    // Parse for preview
     TagInfo preview;
     flatToTag(dumpBuf, &preview);
-
     char msg[128];
     snprintf(msg, sizeof(msg),
              "Write dump:%s\n%s\n#%0lX%0lX%0lX\n\nPlace blank card",
-             preview.filamentType, preview.detailedType,  preview.colorR, preview.colorG, preview.colorB);
+             preview.filamentType, preview.detailedType,
+             preview.colorR, preview.colorG, preview.colorB);
     showStatus(msg);
     appState = S_DUMP_WRITE;
   }
@@ -2473,7 +2702,7 @@ void setup() {
 
   // ── WS2812B LED ─────────────────────────────────────────
   statusLed.begin();
-  statusLed.setBrightness(100);  // 0-255; keep ~80 for 3.3 V direct drive
+  statusLed.setBrightness(200);  // 0-255; keep ~80 for 3.3 V direct drive
   statusLed.clear();
   statusLed.show();
 
@@ -2500,12 +2729,12 @@ void setup() {
   Serial.print(F("RC522 firmware: "));
   rfid.PCD_DumpVersionToSerial();
 
-  // ── SPIFFS ──────────────────────────────────────────────
-  if (!SPIFFS.begin(true))
-    Serial.println(F("SPIFFS mount failed!"));
+  // ── FFat ─────────────────────────────────────────────
+  if (!FFat.begin(true))
+    Serial.println(F("FFat mount failed!"));
   else
-    Serial.printf("SPIFFS: %u/%u bytes used\n",
-                  SPIFFS.usedBytes(), SPIFFS.totalBytes());
+    Serial.printf("FFat: %u/%u bytes used",
+                  FFat.usedBytes(), FFat.totalBytes());
 
   // ── Encoder ─────────────────────────────────────────────
   pinMode(PIN_ENC_CLK, INPUT_PULLUP);
@@ -2550,9 +2779,9 @@ void loop() {
       handleTagViewEncoder();
       break;
 
-    // ── Select dump file from SPIFFS ─────────────────────
+    // ── Select dump file from FAT ─────────────────────
     case S_DUMP_SELECT:
-      handleDumpSelectEncoder();
+      handleFatBrowserEncoder();
       break;
 
     // ── "Any key returns to menu" states ─────────────────

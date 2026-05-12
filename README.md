@@ -11,13 +11,16 @@ Designed around the MIFARE Classic 1K tags embedded in Bambu Lab spools, with fu
 |----------|---------|
 | **RFID** | Read, clone, and write Bambu Lab MIFARE Classic 1K spool tags |
 | **Key derivation** | HKDF-SHA256 with Bambu Lab salt — no hardcoded keys |
-| **OLED menu** | 4-item navigable menu on a 128×64 SH110X / SH1106G display |
+| **OLED menu** | 5-item navigable menu on a 128×64 SH110X / SH1106G display |
 | **Rotary encoder** | ENC11/KY-040 encoder for scroll + click navigation |
 | **WS2812B LED** | Single addressable LED showing filament colour and status |
 | **Web UI** | Four-tab interface: Files / Dumps / Status / WiFi |
 | **GitHub browser** | Browse & download dump files directly on the OLED (no PC needed) |
 | **GitHub API token** | Optional personal access token for higher API rate limits (5 000 req/hr) |
-| **File upload** | Drag-and-drop or file-picker upload of `.bin` dumps to SPIFFS |
+| **File upload** | Drag-and-drop or file-picker upload of `.bin` dumps to FAT |
+| **Directory structure** | Downloaded files mirror the GitHub repo tree on FAT, e.g. `/PLA/PLA_BASIC/BLACK/3AD82DAD.bin` |
+| **FAT browser (OLED)** | "Write Dump" navigates the real directory tree on-device — no flat list |
+| **FAT browser (web)** | Web Files tab browses the full FAT directory tree with a live breadcrumb trail |
 | **WiFi** | Auto-STA on boot; AP fallback `BambuTagger` / `bambu1234` |
 | **Serial debug** | Timestamped debug output; disable with `#define DEBUG_SERIAL 0` |
 
@@ -32,7 +35,7 @@ Designed around the MIFARE Classic 1K tags embedded in Bambu Lab spools, with fu
 | **ESP32** dev board (30-pin) | Any variant with ≥ 4 MB flash | https://de.aliexpress.com/item/1005007488059883.html |
 | **RC522** RFID module | SPI interface | https://de.aliexpress.com/item/1005006907801802.html |
 | **WS2812B LED** (1 - 3 pixel) | 5 V tolerant; powered from 3.3 V is fine for 1 LED | https://de.aliexpress.com/item/32560280169.html |
-| **SH1106G 128×64 1.3" OLED and rotary encoder** | I²C, 0x3C address (SH110X family) | https://de.aliexpress.com/item/1005007728845587.html |
+| **SH1106G 128×64 1.3\" OLED and rotary encoder** | I²C, 0x3C address (SH110X family) | https://de.aliexpress.com/item/1005007728845587.html |
 
 ### Pin Assignments
 
@@ -77,17 +80,19 @@ Schematics are here schematics/schematics.png
 | Setting | Value |
 |---------|-------|
 | Board | **ESP32 Dev Module** |
-| Partition Scheme | **Default 4MB with SPIFFS** |
+| Partition Scheme | **Default 4MB with ffat** |
 | Flash Size | 4 MB |
 | Upload Speed | 921600 |
 | Monitor Speed | **115200** |
+
+> The sketch calls `FFat.begin(true)` — the `true` flag formats the FAT partition automatically on first boot if it is blank.
 
 ---
 
 ## OLED Menu
 
 Navigate with the rotary encoder: rotate to scroll, click to select.  
-Press and hold (or click **\<BACK** items) to return to the main menu.
+Press and hold, or select **\<\< MENU** (always the first row in any browser) to return to the main menu.
 
 ```
 ┌─────────────────┐
@@ -107,7 +112,29 @@ Hold a spool near the RC522.  The sketch derives MIFARE keys from the tag UID us
 Reads the source tag sector-by-sector into RAM, then prompts for the destination tag.  Writes every block (including sector trailers) to the target tag.  Sector-trailer keys are re-derived for the target UID automatically.
 
 ### 3 · Write Dump
-Browse dump files stored on SPIFFS (uploaded via the web UI or downloaded from GitHub).  Select a `.bin` file, present a blank/target tag, and every block is written.
+Browse the dump files stored on FAT using the on-device directory browser.  The browser reflects the real folder tree on the FAT partition (mirroring the GitHub repo structure).  Select a `.bin` file, present a blank/target tag, and every block is written.
+
+#### FAT directory browser
+
+Row 0 of the list is always a navigation shortcut:
+
+| Depth | Row 0 label | Action |
+|-------|-------------|--------|
+| Root | `<< MENU` | Return to main menu |
+| Inside a subfolder | `< BACK` | Go up one level |
+
+| Encoder action | Result |
+|----------------|--------|
+| Rotate | Move cursor up / down |
+| Click `<< MENU` (root) | Return to main menu |
+| Click `< BACK` (sub-dir) | Go up one level |
+| Click on `> DIRNAME` | Enter that subdirectory |
+| Click on a `.bin` file | Load dump → show write-confirm screen |
+
+- **Title bar** shows the current directory name (e.g. `PLA_BASIC`, `BLACK`); root shows `Select Dump`.
+- Entries are sorted: subdirectories first (prefix `>`), then `.bin` files.
+- Up to 4 rows are visible at a time; the list scrolls with the cursor.
+- After a GitHub download completes, the browser pre-navigates to the folder the file was saved to.
 
 ### 4 · GitHub Lib
 Browse the [Bambu Lab RFID Library](https://github.com/queengooborg/Bambu-Lab-RFID-Library) repository **directly on the OLED** — no PC required.  Requires WiFi (STA) connectivity.
@@ -125,9 +152,19 @@ Browse the [Bambu Lab RFID Library](https://github.com/queengooborg/Bambu-Lab-RF
 |----------------|--------|
 | Rotate | Move cursor |
 | Click on folder | Navigate into it |
-| Click **\<BACK** | Go up one level |
-| Click on file | Download & save to SPIFFS |
+| Click **\< BACK** | Go up one level in the GitHub tree |
+| Click on file | Download & save to FAT |
 
+Files are saved to FAT mirroring the GitHub repository directory structure:
+
+| Repo path | Saved as |
+|-----------|----------|
+| `PLA/PLA Basic/Black/3AD82DAD/dump.bin` | `/PLA/PLA_BASIC/BLACK/3AD82DAD.bin` |
+| `ABS/ABS Basic/Red/F1A2B3C4/dump.json` | `/ABS/ABS_BASIC/RED/F1A2B3C4.bin` |
+| `TPU/TPU 95A HF/White/00112233/dump.bin` | `/TPU/TPU_95A_HF/WHITE/00112233.bin` |
+
+Parent directories are created automatically if they don't exist.  
+The OLED **Write Dump** browser shows the short path (`COLOR/UID`, e.g. `BLACK/3AD82DAD`) when highlighting a file.  
 Downloaded files are immediately available in **3 · Write Dump**.
 
 > **Tip:** Set a GitHub personal access token in the **WiFi tab** of the web UI to raise the API rate limit from 60 to 5 000 requests/hour.
@@ -142,23 +179,29 @@ Shows the current IP address (STA or AP).  Open a browser to the displayed addre
 Connect to the ESP32's IP (shown on the OLED) in any browser.
 
 ### Tab 1 — Files
-- Lists all `.bin` dump files stored on SPIFFS.
-- **Upload** new files via drag-and-drop or file picker (`.bin` only, max 1 KB).
-- **Delete** any file.
+Fully navigable browser for the FAT file system.
+
+- **Breadcrumb trail** (`Root / PLA / PLA_BASIC / BLACK`) — click any segment to jump directly to that level.
+- **Folder entries** (📁) — click to navigate into a subdirectory.
+- **⬆ ..** row — click to go up one level (hidden at root).
+- **Refresh** button reloads the current directory.
+- **Upload** new files via drag-and-drop or file picker (`.bin` only) — files are placed in the currently browsed directory.
+- **Delete** any `.bin` file with the ✕ button (full path passed to the server).
 
 ### Tab 2 — Dumps
 - Browse the GitHub repository tree by folder path.
-- Click any `.bin` or `.json` dump file to download it directly to SPIFFS.
+- Click any `.bin` or `.json` dump file to download it directly to FAT.
+- Downloaded files are stored in a directory tree matching the GitHub repo structure (e.g. `/PLA/PLA_BASIC/BLACK/3AD82DAD.bin`).
 
 ### Tab 3 — Status
 - Shows current WiFi mode, SSID, and IP address.
-- Shows free Heap and SPIFFS usage.
+- Shows free heap and FAT usage (total / used bytes).
 - Shows all data from the last read tag.
 
 ### Tab 4 — WiFi
 - Shows current WiFi mode, SSID, and IP address.
 - Scan for networks and connect to a new SSID + password.
-- Credentials are saved to ESP32 NVS (via `Preferences`, namespace `wifi`) and restored on every boot — no file is written to SPIFFS.
+- Credentials are saved to ESP32 NVS (via `Preferences`, namespace `wifi`) and restored on every boot — no file is written to FAT.
 - **GitHub API Token** — enter a personal access token (read-only, no scopes required) and click **🔑 Save Token**.  The token is stored in NVS and injected as a `Bearer` header into every GitHub API request.  Leave blank to use unauthenticated access (60 req/hr limit).
 
 ---
@@ -169,13 +212,13 @@ All endpoints return JSON unless noted.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/status` | WiFi mode, SSID, IP, selected dump path |
+| `GET` | `/api/status` | WiFi mode, SSID, IP, selected dump path, FAT usage |
 | `POST` | `/api/wifi` | `{"ssid":"…","pass":"…"}` — connect & save |
 | `GET` | `/api/scan` | Array of nearby SSIDs |
 | `GET` | `/api/list?path=…` | GitHub directory listing for `path` |
-| `POST` | `/api/download` | `{"url":"…","name":"…"}` — download raw file to SPIFFS |
-| `GET` | `/api/files` | Array of `.bin` filenames on SPIFFS |
-| `POST` | `/api/delete` | `{"file":"…"}` — delete a SPIFFS file |
+| `POST` | `/api/download` | `{"url":"…","path":"…"}` — download raw file to FAT, filename auto-derived from `path` |
+| `GET` | `/api/files?dir=<path>` | Directory listing for `path` (default `/`); returns `{path, entries:[{name,isDir,size?}]}` |
+| `POST` | `/api/delete` | `{"file":"…"}` — delete a FAT file |
 | `POST` | `/api/upload` | `multipart/form-data` field `file` — upload a `.bin` |
 | `GET` | `/api/token` | Returns `{"token":"ghp_…"}` (masked after first 4 chars) |
 | `POST` | `/api/token` | `{"token":"…"}` — save GitHub API token to NVS |
@@ -226,6 +269,26 @@ To avoid hitting this limit:
 4. The token is saved to NVS and used automatically for all subsequent GitHub requests (rate limit raised to **5 000 req/hr**).
 
 > The token is sent only to `api.github.com` and `raw.githubusercontent.com`.  It is never logged to serial output.
+
+---
+
+## FAT Directory Structure
+
+Downloaded dump files are stored in a directory tree that mirrors the GitHub repository layout.  Parent directories are created automatically.
+
+**Path mapping rules:**
+- Each directory segment is **uppercased**
+- Spaces are replaced with **underscores**
+- The leaf filename is always `<UID>.bin` (extension forced to `.bin`)
+
+| Repo path | FAT path |
+|-----------|----------|
+| `PLA/PLA Basic/Black/3AD82DAD/dump.bin` | `/PLA/PLA_BASIC/BLACK/3AD82DAD.bin` |
+| `ABS/ABS Basic/Red/F1A2B3C4/dump.json` | `/ABS/ABS_BASIC/RED/F1A2B3C4.bin` |
+| `TPU/TPU 95A HF/White/00112233/dump.bin` | `/TPU/TPU_95A_HF/WHITE/00112233.bin` |
+| `PETG/PETG HF/Bambu Green/AABBCCDD/dump.bin` | `/PETG/PETG_HF/BAMBU_GREEN/AABBCCDD.bin` |
+
+Manually uploaded files (via the web UI) are placed at the FAT root (`/`) as-is.
 
 ---
 
@@ -283,15 +346,24 @@ To disable all debug output and save flash/RAM:
 
 ---
 
-## SPIFFS Layout
+## FAT Layout
 
 ```
-/PLA_Black.bin      — user-uploaded or GitHub-downloaded dump files
-/ABS_Red.bin
-/…
+/                                    — manually uploaded files live here
+  my_custom_dump.bin
+  PLA/
+    PLA_BASIC/
+      BLACK/
+        3AD82DAD.bin                 — downloaded via OLED or web Dumps tab
+      RED/
+        F1A2B3C4.bin
+  ABS/
+    ABS_BASIC/
+      WHITE/
+        00112233.bin
 ```
 
-> WiFi credentials and the GitHub API token are stored in ESP32 NVS (flash key-value store via `Preferences`), not in SPIFFS.
+> WiFi credentials and the GitHub API token are stored in ESP32 NVS (flash key-value store via `Preferences`), not on FAT.
 
 ---
 
@@ -300,9 +372,11 @@ To disable all debug output and save flash/RAM:
 1. Install the Arduino IDE (≥ 2.x) and the [ESP32 board package](https://docs.espressif.com/projects/arduino-esp32/en/latest/installing.html).
 2. Install all libraries listed above via **Sketch → Include Library → Manage Libraries**.
 3. Open `BambuTagger.ino`.
-4. Select **Tools → Board → ESP32 Dev Module** and set the partition scheme to **Default 4MB with SPIFFS**.
+4. Select **Tools → Board → ESP32 Dev Module** and set the partition scheme to **Default 4MB with ffat**.
 5. Click **Upload**.
 6. Open **Tools → Serial Monitor** at 115200 baud to watch the boot log.
+
+> On first boot the FAT partition will be formatted automatically (`FFat.begin(true)`).
 
 ---
 
