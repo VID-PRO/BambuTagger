@@ -779,7 +779,7 @@ void drawTagInfo(const TagInfo* t, int page) {
       oled.printf("UID:   %02X%02X%02X%02X\n",
                   t->uid[0], t->uid[1], t->uid[2], t->uid[3]);
       oled.print("\n");
-      oled.print("[click]=back");
+      oled.print("Click to return");
       break;
   }
 
@@ -984,7 +984,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0d1117;color:#c9d1d9;min-heig
 a{text-decoration:none;color:#c9d1d9;}
 a:hover{text-decoration:none;color:#efefef;}
 .nav{background:#161b22;border-bottom:1px solid #30363d;padding:12px 20px;display:flex;align-items:center;gap:20px}
-.nav h1{color:#58a6ff;font-size:1.2em;flex:1}
+.nav h1{color:#c9d1d9;font-size:1.2em;flex:1}
 .nav .pill{background:#21262d;border-radius:20px;padding:4px 12px;font-size:.8em;cursor:pointer;border:1px solid #30363d;color:#c9d1d9}
 .nav .pill.active{background:#1f6feb;border-color:#1f6feb;color:#fff}
 .footer{left: 0;position: fixed;text-align: center;bottom: 0;width: 100%;background:#161b22;padding:12px 20px;align-items:center;gap:20px}
@@ -1250,7 +1250,7 @@ function bmSearch() {
     '<table style=\"width:100%;border-collapse:collapse\">' +
     '<thead><tr style=\"color:#8b949e;border-bottom:1px solid #30363d\">' +
     '<th style=\"text-align:left;padding:3px 5px\">UID</th>' +
-    '<th style=\"text-align:left;padding:3px 5px\">Mat</th>' +
+    '<th style=\"text-align:left;padding:3px 5px\">Material</th>' +
     '<th style=\"text-align:left;padding:3px 5px\">Type</th>' +
     '<th style=\"text-align:left;padding:3px 5px\">Color</th>' +
     '<th style=\"padding:3px 5px\"></th></tr></thead><tbody>' +
@@ -3488,7 +3488,7 @@ String bmCatFetchUid(const String& uid) {
     String msg = "BambuMan\nHTTP " + String(code);
     if (code == 404) msg = "BambuMan\nUID not found";
     if (code == 403) msg = "BambuMan\nBlocked (CF)\nTry Web UI";
-    showStatus((msg + "\n\n[click]=back").c_str());
+    showStatus((msg + "\n\nClick to return").c_str());
     ledFlash(255, 0, 0, 2);
     return "";
   }
@@ -3496,7 +3496,7 @@ String bmCatFetchUid(const String& uid) {
   int totalSize = http.getSize();
   if (totalSize > 0 && totalSize != DUMP_SIZE) {
     http.end();
-    showStatus(("BambuMan\nBad size:\n" + String(totalSize) + "\n\n[click]=back").c_str());
+    showStatus(("BambuMan\nBad size:\n" + String(totalSize) + "\n\nClick to return").c_str());
     ledFlash(255, 0, 0, 2);
     return "";
   }
@@ -3514,7 +3514,7 @@ String bmCatFetchUid(const String& uid) {
   File f = FFat.open(savePath, "w");
   if (!f) {
     http.end();
-    showStatus("BambuMan\nFFat write\nfailed!\n\n[click]=back");
+    showStatus("BambuMan\nFFat write\nfailed!\n\nClick to return");
     ledFlash(255, 0, 0, 2);
     return "";
   }
@@ -3525,7 +3525,7 @@ String bmCatFetchUid(const String& uid) {
   if (written != DUMP_SIZE) {
     FFat.remove(savePath);
     DBGF("[BM]  incomplete %d/%d\n", written, DUMP_SIZE);
-    showStatus(("BambuMan\nIncomplete:\n" + String(written) + "/" + String(DUMP_SIZE) + "\n\n[click]=back").c_str());
+    showStatus(("BambuMan\nIncomplete:\n" + String(written) + "/" + String(DUMP_SIZE) + "\n\nClick to return").c_str());
     ledFlash(255, 0, 0, 2);
     return "";
   }
@@ -3624,7 +3624,7 @@ void handleBmCatEncoder() {
       }
     } else {
       if (df) df.close();
-      showStatus(("Saved!\n" + saved + "\n\n[click]=back").c_str());
+      showStatus(("Saved!\n" + saved + "\n\nClick to return").c_str());
       ledFlash(0, 255, 0, 2);
       unsigned long t0 = millis();
       while (millis() - t0 < 8000) {
@@ -3663,11 +3663,11 @@ void processBmBrowse() {
       appState = S_WIFI_INFO; return;
     }
     ledFlash(0, 255, 0, 2);
-    showStatus(("BambuMan OK!\n\n" + saved + "\n\nPress to return.").c_str());
+    showStatus(("BambuMan OK!\n\n" + saved + "\n\nClick to return.").c_str());
     appState = S_WIFI_INFO;
     return;
   }
-  showStatus("BambuMan\nNo tag detected.\n\nPress to return.");
+  showStatus("BambuMan\nNo tag detected.\n\nClick to return.");
   ledFlash(255, 0, 0, 2);
   appState = S_WIFI_INFO;
 }
@@ -3790,7 +3790,7 @@ void handleFatBrowserEncoder() {
     if (!f || f.size() != DUMP_SIZE) {
       DBGF("[DUMP]  Bad file: size=%u expected=%u\n",
            f ? (unsigned)f.size() : 0, DUMP_SIZE);
-      showStatus("Bad dump file!\n\nPress to return");
+      showStatus("Bad dump file!\n\nClick to return");
       appState = S_WIFI_INFO;
       return;
     }
@@ -3848,7 +3848,7 @@ void processReadTag() {
   }
   DBGLN("[RFID] processReadTag: timeout – no tag.");
   ledFlash(255, 0, 0, 2);  // two red flashes = no tag
-  showStatus("No tag detected.\n\nPress to return.");
+  showStatus("No tag detected.\n\nClick to return.");
   appState = S_WIFI_INFO;
 }
 
@@ -3881,7 +3881,7 @@ void processCloneSource() {
   }
   DBGLN("[CLONE] processCloneSource: timeout – no tag.");
   ledFlash(255, 0, 0, 2);
-  showStatus("Timeout. No tag.\n\nPress to return.");
+  showStatus("Timeout. No tag.\n\nClick to return.");
   appState = S_WIFI_INFO;
 }
 
@@ -3909,8 +3909,8 @@ void processCloneTarget() {
       } else {
         ledFlash(255, 0, 0, 3);  // 3× red = fail
       }
-      showStatus(ok ? "Clone complete!\n\nPress to return."
-                    : "Write failed!\nTry a magic card.\n\nPress to return.");
+      showStatus(ok ? "Clone complete!\n\nClick to return."
+                    : "Write failed!\nTry a magic/FUID\ncard.\n\nClick to return.");
       appState = S_WIFI_INFO;
       return;
     }
@@ -3918,7 +3918,7 @@ void processCloneTarget() {
   }
   DBGLN("[CLONE] processCloneTarget: timeout – no card.");
   ledFlash(255, 0, 0, 2);
-  showStatus("Timeout. No card.\n\nPress to return.");
+  showStatus("Timeout. No card.\n\nClick to return.");
   appState = S_WIFI_INFO;
 }
 
@@ -3952,10 +3952,10 @@ void processDumpWrite() {
       DBGF("[DUMP]  Write result: %s\n", ok ? "OK" : "FAIL");
       if (ok) {
         ledFlash(0, 255, 0, 3);  // 3× green = success
-        showStatus("Write complete!\n\nPress to return.");
+        showStatus("Write complete!\n\nClick to return.");
       } else {
         ledFlash(255, 0, 0, 3);  // 3× red = fail
-        showStatus("Write failed!\nTry a magic/FUID\ncard.\n\nPress to return.");
+        showStatus("Write failed!\nTry a magic/FUID\ncard.\n\nClick to return.");
       }
       appState = S_WIFI_INFO;
       return;
@@ -3964,7 +3964,7 @@ void processDumpWrite() {
   }
   DBGLN("[DUMP]  processDumpWrite: timeout – no card.");
   ledFlash(255, 0, 0, 2);
-  showStatus("Timeout. No card.\n\nPress to return.");
+  showStatus("Timeout. No card.\n\nClick to return.");
   appState = S_WIFI_INFO;
 }
 
