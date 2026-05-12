@@ -11,8 +11,8 @@ Designed around the MIFARE Classic 1K tags embedded in Bambu Lab spools, with fu
 |----------|---------|
 | **RFID** | Read, clone, and write Bambu Lab MIFARE Classic 1K spool tags |
 | **Key derivation** | HKDF-SHA256 with Bambu Lab salt — no hardcoded keys |
-| **OLED menu** | 5-item navigable menu on a 128×64 SH110X / SH1106G display |
-| **Rotary encoder** | KY-040 encoder for scroll + click navigation |
+| **OLED menu** | 4-item navigable menu on a 128×64 SH110X / SH1106G display |
+| **Rotary encoder** | ENC11/KY-040 encoder for scroll + click navigation |
 | **WS2812B LED** | Single addressable LED showing filament colour and status |
 | **Web UI** | Four-tab interface: Files / Dumps / Status / WiFi |
 | **GitHub browser** | Browse & download dump files directly on the OLED (no PC needed) |
@@ -29,7 +29,7 @@ Designed around the MIFARE Classic 1K tags embedded in Bambu Lab spools, with fu
 
 | Component | Notes | Buy |
 |-----------|-------|-----|
-| **ESP32** dev board (38-pin or 30-pin) | Any variant with ≥ 4 MB flash | https://de.aliexpress.com/item/1005007488059883.html |
+| **ESP32** dev board (30-pin) | Any variant with ≥ 4 MB flash | https://de.aliexpress.com/item/1005007488059883.html |
 | **RC522** RFID module | SPI interface | https://de.aliexpress.com/item/1005006907801802.html |
 | **WS2812B LED** (1 - 3 pixel) | 5 V tolerant; powered from 3.3 V is fine for 1 LED | https://de.aliexpress.com/item/32560280169.html |
 | **SH1106G 128×64 1.3" OLED and rotary encoder** | I²C, 0x3C address (SH110X family) | https://de.aliexpress.com/item/1005007728845587.html |
