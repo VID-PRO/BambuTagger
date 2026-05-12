@@ -71,7 +71,7 @@ jobs:
             --fqbn "esp32:esp32:esp32:PartitionScheme=default_ffat" \
             --output-dir "${{ github.workspace }}/build" \
             --warnings none \
-            "${{ github.workspace }}/BambuTagger/BambuTagger.ino"
+            "${{ github.workspace }}/BambuTagger.ino"
 
       # ── 7. Build a merged flashable binary ───────────────────
       # Combines bootloader + partition table + app into a single
