@@ -4,6 +4,7 @@
  * ============================================================
  *  Read, clone and write Bambu Lab filament spool RFID tags.
  *  Dump library:  https://github.com/queengooborg/Bambu-Lab-RFID-Library
+                   https://bambuman.ee/
  *  Tag format:    https://github.com/queengooborg/Bambu-Lab-RFID-Tag-Guide
  *
  *  KEY DERIVATION (KDF):
@@ -778,7 +779,7 @@ void drawTagInfo(const TagInfo* t, int page) {
       oled.printf("UID:   %02X%02X%02X%02X\n",
                   t->uid[0], t->uid[1], t->uid[2], t->uid[3]);
       oled.print("\n");
-      oled.print("Press=back");
+      oled.print("[click]=back");
       break;
   }
 
@@ -980,6 +981,8 @@ static const char INDEX_HTML[] PROGMEM = R"HTMLRAW(
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Segoe UI',sans-serif;background:#0d1117;color:#c9d1d9;min-height:100vh}
+a{text-decoration:none;color:#c9d1d9;}
+a:hover{text-decoration:none;color:#efefef;}
 .nav{background:#161b22;border-bottom:1px solid #30363d;padding:12px 20px;display:flex;align-items:center;gap:20px}
 .nav h1{color:#58a6ff;font-size:1.2em;flex:1}
 .nav .pill{background:#21262d;border-radius:20px;padding:4px 12px;font-size:.8em;cursor:pointer;border:1px solid #30363d;color:#c9d1d9}
@@ -1163,7 +1166,7 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
 <div class="footer">
   <center>&copy; 2026 by <a href="https://www.vid-pro.de" target=_new>VID-PRO</a> | 
   credits to <a href="https://github.com/Bambu-Research-Group/RFID-Tag-Guide" target=_new>RFID-Tag-Guide</a> |
-  Library from <a href="https://github.com/queengooborg/Bambu-Lab-RFID-Library" target=_new>Bambu-Lab-RFID-Library</a> and <a href="https://bambuman.ee" target=_new>bambuman</a>
+  Library from <a href="https://github.com/queengooborg/Bambu-Lab-RFID-Library" target=_new>Bambu-Lab-RFID-Library</a> and <a href="https://bambuman.ee" target=_new>BambuMan</a>
   </center>
 </div>
 <!-- /content -->
@@ -1252,7 +1255,7 @@ function bmSearch() {
     '<th style=\"text-align:left;padding:3px 5px\">Color</th>' +
     '<th style=\"padding:3px 5px\"></th></tr></thead><tbody>' +
     show.map(e => {
-      const saved = '/BM/' + e.u + '.bin';
+            const fp = buildBmPath(e.m, e.t, e.c, e.u);
       return '<tr style=\"border-bottom:1px solid #21262d\">' +
         '<td style=\"padding:3px 5px;font-family:monospace\">' + e.u + '</td>' +
         '<td style=\"padding:3px 5px\">' + e.m + '</td>' +
@@ -1260,10 +1263,10 @@ function bmSearch() {
         '<td style=\"padding:3px 5px\">' + e.c + '</td>' +
         '<td style=\"padding:3px 5px;white-space:nowrap\">' +
         '<button class=\"btn\" style=\"padding:2px 7px;font-size:.75em;margin-right:3px\"' +
-        'onclick=\"bmFetchUid(\'' + e.u + '\')\">' +
-        '\u2B07 Fetch</button>' +
+        'onclick=\"bmFetchEntry(\'' + e.u + '\',\'' + e.m.replace('/g','\\') + '\',\'' + e.t.replace('/g','\\') + '\',\'' + e.c.replace('/g','\\') + '\')\">' +
+        '\u2B07 Download</button>' +
         '<button class=\"btn\" style=\"padding:2px 7px;font-size:.75em;background:#2196F3;color:#fff\"' +
-        'onclick=\"writeTagFromFile(\' + saved + \')\">' +
+        'onclick=\"writeTagFromFile(\'' + fp + '\')\">' +
         '\u270F Write</button>' +
         '</td></tr>';
     }).join('') + '</tbody></table>' +
@@ -1273,9 +1276,32 @@ function bmSearch() {
       : '');
 }
 
+function normBmSeg(s) { return s.toUpperCase().replace(/ /g, '_'); }
+function buildBmPath(m, t, c, u) {
+  return '/' + normBmSeg(m) + '/' + normBmSeg(t) + '/' + normBmSeg(c) + '/' + u + '.bin';
+}
+
 function bmFetchUid(uid) {
   document.getElementById('bm-uid').value = uid;
   bmFetch();
+}
+
+// Called from search results where we have full m/t/c info
+function bmFetchEntry(uid, mat, typ, col) {
+  const st = document.getElementById('bm-status');
+  if (st) st.innerHTML = '<div class=\"status info\">⏳ Fetching ' + uid + '…</div>';
+  const params = new URLSearchParams({uid, mat, type: typ, color: col});
+  fetch('/api/bm/fetch?' + params)
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok) {
+        if (st) st.innerHTML = '<div class=\"status ok\">✓ Saved as ' + d.path + ' (' + d.size + ' B)</div>';
+        loadBmList();
+      } else {
+        if (st) st.innerHTML = '<div class=\"status err\">✗ ' + d.error + '</div>';
+      }
+    })
+    .catch(e => { if (st) st.innerHTML = '<div class=\"status err\">Request failed: ' + e + '</div>'; });
 }
 
 function bmFetch() {
@@ -1297,38 +1323,37 @@ function bmFetch() {
 }
 
 function loadBmList() {
-  fetch('/api/files?dir=/BM')
+  fetch('/api/bm/list')
     .then(r => r.json())
-    .then(d => {
-      const el    = document.getElementById('bm-list');
-      const cnt   = document.getElementById('bm-count');
-      const files = (d.entries || []).filter(e => !e.isDir);
+    .then(files => {
+      const el  = document.getElementById('bm-list');
+      const cnt = document.getElementById('bm-count');
       cnt.textContent = '(' + files.length + ')';
       if (!files.length) {
-        el.innerHTML = '<div class=\"status info\">No files yet.</div>';
+        el.innerHTML = '<div class=\\"status info\\">No files yet.</div>';
         return;
       }
       el.innerHTML = files.map(e => {
-        const sz  = e.size < 1024 ? e.size + ' B' : (e.size/1024).toFixed(1) + ' KB';
-        const fp  = '/BM/' + e.name;
+        const sz   = e.size < 1024 ? e.size + ' B' : (e.size/1024).toFixed(1) + ' KB';
+        const name = e.path.split('/').pop();
         return '<div class=\"file-entry\">' +
-               '<span class=\"file-name\">&#128222; ' + e.name + '</span>' +
+               '<span class=\"file-name\">&#128222; ' + name + '</span>' +
                '<span class=\"file-size\">' + sz + '</span>' +
                '<button class=\"btn\" style=\"padding:4px 8px;font-size:.75em;background:#2196F3;color:#fff;margin-right:4px\"' +
-               'onclick=\"writeTagFromFile(\' + fp + \')\">' +
-               '&#9997; Write</button>' +
+               'onclick=\"writeTagFromFile(\'' + e.path + '\')\">' +
+               '\u270F Write</button>' +
                '<button class=\"btn btn-danger\" style=\"padding:4px 8px;font-size:.75em\"' +
-               'onclick=\"bmDelFile(\' + e.name + \')\">' +
+               'onclick=\"bmDelFile(\'' + e.path + '\')\">' +
                '&#128465;</button></div>';
       }).join('');
     })
     .catch(() => {});
 }
 
-function bmDelFile(name) {
-  if (!confirm('Delete /BM/' + name + '?')) return;
+function bmDelFile(path) {
+  if (!confirm('Delete ' + path + '?')) return;
   fetch('/api/delete', {method:'POST', headers:{'Content-Type':'application/json'},
-                        body: JSON.stringify({file: '/BM/' + name})})
+                        body: JSON.stringify({file: path})})
     .then(() => loadBmList());
 }
 
@@ -1408,8 +1433,8 @@ function githubNav(path) {
         html += `<li class="dir" onclick="githubNav('${it.path}')"> ${it.name}</li>`;
       } else if(it.name.endsWith('.bin')){
         html += `<li class="file"> ${it.name}
-          <button class="btn btn-success" style="margin-left:auto;margin-top:0;padding:4px 10px"
-            onclick="dlDump('${it.path}','${it.name.replace(/'/g,"\\'")}')">⬇ Download</button></li>`;
+          <button class="btn" style="margin-left:auto;margin-top:0;padding:4px 10px"
+            onclick="dlDump('${it.path}','${it.name.replace(/'/g,"\\'")}')">\u2B07 Download</button></li>`;
       }
     });
     html += '</ul>';
@@ -1468,7 +1493,7 @@ function loadLocal(dir) {
     entries.filter(e=>!e.isDir).sort((a,b)=>a.name.localeCompare(b.name)).forEach(e=>{
       const fp = localPath==='/' ? '/'+e.name : localPath+'/'+e.name;
       const sz = e.size<1024 ? e.size+' B' : (e.size/1024).toFixed(1)+' KB';
-      html += '<div class="file-entry"><span class="file-name">💾 '+e.name+'</span><span class="file-size">'+sz+'</span><button class="btn" style="padding:4px 8px;font-size:.75em;background:#2196F3;color:#fff;margin-right:4px" onclick="writeTagFromFile(\''+fp+'\')">✍️ Write</button><button class="btn btn-danger" style="padding:4px 8px;font-size:.75em" onclick="delFile(\''+fp+'\')">🗑</button></div>';
+      html += '<div class="file-entry"><span class="file-name">💾 '+e.name+'</span><span class="file-size">'+sz+'</span><button class="btn" style="padding:4px 8px;font-size:.75em;background:#2196F3;color:#fff;margin-right:4px" onclick="writeTagFromFile(\''+fp+'\')">\u270F Write</button><button class="btn btn-danger" style="padding:4px 8px;font-size:.75em" onclick="delFile(\''+fp+'\')">🗑</button></div>';
     });
     if(!html) html = '<div class="status info">Empty folder.</div>';
     document.getElementById('local-list').innerHTML = html;
@@ -1807,6 +1832,90 @@ String buildDumpFilePath(String repoPath) {
   }
   result += ".bin";
   return result;
+}
+
+
+// ── BambuMan structured path: /{MAT}/{TYPE}/{COLOR}/{UID}.bin ─────────────
+String buildBmFilePath(const String& m, const String& t, const String& c, const String& uid) {
+  auto norm = [](String s) { s.toUpperCase(); s.replace(" ", "_"); return s; };
+  return "/" + norm(m) + "/" + norm(t) + "/" + norm(c) + "/" + uid + ".bin";
+}
+
+// Stream-search /BM/catalog.json for a given UID; fill outMat/outType/outCol.
+bool bmLookupCatalog(const String& uid, String& outMat, String& outType, String& outCol) {
+  if (!FFat.exists("/BM/catalog.json")) return false;
+  File f = FFat.open("/BM/catalog.json", "r");
+  if (!f) return false;
+  String needle = "\"u\":\"" + uid + "\"";
+  String carry = "";
+  carry.reserve(512);
+  bool found = false;
+  while (f.available() && !found) {
+    char buf[128]; int n = f.read((uint8_t*)buf, sizeof(buf)-1); buf[n] = 0;
+    carry += buf;
+    int pos = carry.indexOf(needle);
+    if (pos >= 0) {
+      int start = carry.lastIndexOf('{', pos);
+      int end   = carry.indexOf('}', pos);
+      if (start >= 0 && end > pos) {
+        String obj = carry.substring(start, end + 1);
+        StaticJsonDocument<256> doc;
+        if (deserializeJson(doc, obj) == DeserializationError::Ok) {
+          outMat  = doc["m"] | "";
+          outType = doc["t"] | "";
+          outCol  = doc["c"] | "";
+          found = true;
+        }
+      }
+    }
+    // Keep overlap to avoid splitting across the needle
+    if ((int)carry.length() > 512) carry = carry.substring(carry.length() - (int)needle.length() - 20);
+  }
+  f.close();
+  return found;
+}
+
+// Append a BM file path to /BM/index.txt (deduplicated).
+void bmIndexAdd(const String& path) {
+  if (!FFat.exists("/BM")) FFat.mkdir("/BM");
+  // Check for duplicate
+  File fr = FFat.open("/BM/index.txt", "r");
+  if (fr) {
+    while (fr.available()) {
+      String line = fr.readStringUntil('\n'); line.trim();
+      if (line == path) { fr.close(); return; }
+    }
+    fr.close();
+  }
+  File fa = FFat.open("/BM/index.txt", "a");
+  if (fa) { fa.println(path); fa.close(); }
+}
+
+// GET /api/bm/list – return index of downloaded BM files; prune stale entries.
+void apiBmList() {
+  if (!FFat.exists("/BM/index.txt")) {
+    httpServer.send(200, "application/json", "[]"); return;
+  }
+  File f = FFat.open("/BM/index.txt", "r");
+  if (!f) { httpServer.send(200, "application/json", "[]"); return; }
+  String out = "[", newIdx = "";
+  bool first = true;
+  while (f.available()) {
+    String line = f.readStringUntil('\n'); line.trim();
+    if (line.length() == 0) continue;
+    if (!FFat.exists(line)) continue;           // prune stale
+    File fc = FFat.open(line, "r");
+    int sz = fc ? (int)fc.size() : 0; if (fc) fc.close();
+    if (!first) out += ","; first = false;
+    String p = line; p.replace("\"", "\\\"");
+    out += "{\"path\":\"" + p + "\",\"size\":" + sz + "}";
+    newIdx += line + "\n";
+  }
+  f.close();
+  out += "]";
+  File fw = FFat.open("/BM/index.txt", "w");    // rewrite without stale entries
+  if (fw) { fw.print(newIdx); fw.close(); }
+  httpServer.send(200, "application/json", out);
 }
 
 // Return the two innermost path segments for short OLED display.
@@ -2243,8 +2352,29 @@ void apiBmFetch() {
     http.end(); return;
   }
 
-  if (!FFat.exists("/BM")) FFat.mkdir("/BM");
-  String savePath = "/BM/" + uid + ".bin";
+  // ── Resolve save path (structured) ──────────────────────────────────────
+  String mat  = httpServer.arg("mat");
+  String typ  = httpServer.arg("type");
+  String col  = httpServer.arg("color");
+  mat.trim(); typ.trim(); col.trim();
+  // If m/t/c not supplied, try catalog lookup
+  if (mat.isEmpty() || typ.isEmpty() || col.isEmpty()) {
+    String lm, lt, lc;
+    if (bmLookupCatalog(uid, lm, lt, lc)) {
+      if (mat.isEmpty())  mat = lm;
+      if (typ.isEmpty())  typ = lt;
+      if (col.isEmpty())  col = lc;
+    }
+  }
+  String savePath;
+  if (!mat.isEmpty() && !typ.isEmpty() && !col.isEmpty()) {
+    savePath = buildBmFilePath(mat, typ, col, uid);
+  } else {
+    if (!FFat.exists("/BM")) FFat.mkdir("/BM");
+    savePath = "/BM/" + uid + ".bin";
+    DBGLN("[BM]  No m/t/c — using fallback path");
+  }
+  ensureParentDirs(savePath);
   File f = FFat.open(savePath, "w");
   if (!f) { fail(500, "FFat open failed"); http.end(); return; }
 
@@ -2258,6 +2388,7 @@ void apiBmFetch() {
     return;
   }
 
+  bmIndexAdd(savePath);
   DBGF("[BM]  Saved %s (%d bytes)\n", savePath.c_str(), written);
   resp["ok"]   = true;
   resp["path"] = savePath;
@@ -2316,6 +2447,7 @@ void setupHTTPServer() {
   httpServer.on("/api/upload", HTTP_POST, apiUploadDone, apiUploadHandler);
   httpServer.on("/api/writetag", HTTP_POST, apiWriteTag);
   httpServer.on("/api/bm/fetch",   HTTP_GET,  apiBmFetch);
+  httpServer.on("/api/bm/list",    HTTP_GET,  apiBmList);
   httpServer.on("/api/bm/sync",    HTTP_POST, apiBmSync);
   httpServer.on("/api/bm/catalog", HTTP_GET,  apiBmCatalog);
   httpServer.enableCORS(true);
@@ -3369,8 +3501,16 @@ String bmCatFetchUid(const String& uid) {
     return "";
   }
 
-  if (!FFat.exists("/BM")) FFat.mkdir("/BM");
-  String savePath = "/BM/" + uid + ".bin";
+  // ── Resolve save path using catalog context ───────────────────────────────
+  String mat(bmCatMat), typ(bmCatType), col(bmCatColor);
+  String savePath;
+  if (mat.length() > 0 && typ.length() > 0 && col.length() > 0) {
+    savePath = buildBmFilePath(mat, typ, col, uid);
+  } else {
+    if (!FFat.exists("/BM")) FFat.mkdir("/BM");
+    savePath = "/BM/" + uid + ".bin";
+  }
+  ensureParentDirs(savePath);
   File f = FFat.open(savePath, "w");
   if (!f) {
     http.end();
@@ -3390,6 +3530,7 @@ String bmCatFetchUid(const String& uid) {
     return "";
   }
 
+  bmIndexAdd(savePath);
   DBGF("[BM]  Saved %s\n", savePath.c_str());
   return savePath;
 }

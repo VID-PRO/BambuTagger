@@ -20,7 +20,7 @@ Designed around the MIFARE Classic 1K tags embedded in Bambu Lab spools, with fu
 | **BambuMan OLED browser** | Browse the bambuman.ee catalog by Material → Type → Color → UID on the OLED; sync the catalog directly from the OLED without a PC |
 | **BambuMan web search** | Sync catalog, filter by material/color, fetch & write from web UI |
 | **File upload** | Drag-and-drop or file-picker upload of `.bin` dumps to FAT |
-| **Directory structure** | Downloaded files mirror the GitHub repo tree on FAT, e.g. `/PLA/PLA_BASIC/BLACK/3AD82DAD.bin` |
+| **Directory structure** | Both GitHub and BambuMan downloads use the same `/{MAT}/{TYPE}/{COLOR}/{UID}.bin` tree on FAT — no separate `/BM/` folder for bin files |
 | **FAT browser (OLED)** | "Write Dump" navigates the real directory tree on-device — no flat list |
 | **FAT browser (web)** | Web Files tab browses the full FAT directory tree with a live breadcrumb trail |
 | **WiFi** | Auto-STA on boot; AP fallback `BambuTagger` / `bambu1234` |
@@ -207,7 +207,7 @@ Material (PLA, PETG, ABS, TPU …)
 | Click `> Sync Catalog` (Material level) | Run catalog sync on-device (see below) |
 | Click `< BACK` (deeper levels) | Go up one level |
 | Click a Material / Type / Color | Navigate into it |
-| Click a UID | Fetch `data.bin` from bambuman.ee → save to `/BM/<UID>.bin` |
+| Click a UID | Fetch `data.bin` from bambuman.ee → save to `/{MAT}/{TYPE}/{COLOR}/{UID}.bin` |
 | Click after a successful fetch | Enter RFID write flow immediately |
 | Rotate after a successful fetch | Cancel fetch result, stay in browser |
 
@@ -285,14 +285,14 @@ Click **🔄 Sync Catalog** to fetch the bambuman.ee file index.  The ESP32 send
 - **Material dropdown** — auto-populated from the catalog (PLA, PETG, ABS, TPU …).
 - **Color / name text input** — live-filters the results as you type.
 - Scrollable results table (up to 100 rows): UID · Material · Type · Color.
-- Per-row **⬇ Fetch** — downloads `data.bin` to `/BM/<UID>.bin`.
+- Per-row **⬇ Fetch** — downloads `data.bin` to `/{MAT}/{TYPE}/{COLOR}/{UID}.bin` (material/type/color are known from the catalog row).
 - Per-row **✏️ Write** — downloads (if not already cached) and queues a tag-write (20 s window).
 
 #### Fetch by UID
-Enter a known UID directly and click **⬇ Fetch** to retrieve `data.bin` from `https://bambuman.ee/api/tags/{UID}/data.bin`.  File is saved to `/BM/<UID>.bin`.
+Enter a known UID directly and click **⬇ Fetch** to retrieve `data.bin` from `https://bambuman.ee/api/tags/{UID}/data.bin`.  The server tries to resolve the material/type/color from the catalog first; if found the file is placed in the structured tree (`/{MAT}/{TYPE}/{COLOR}/{UID}.bin`), otherwise it falls back to `/BM/{UID}.bin`.
 
 #### Downloaded files
-Lists all files in `/BM/` with **✍️ Write** and **🗑 Delete** buttons.
+Lists all BambuMan-downloaded files (read from `/BM/index.txt`) with **✍️ Write** and **🗑 Delete** buttons.  Stale index entries (file deleted from FAT) are pruned automatically on each listing.
 
 ---
 
@@ -315,7 +315,8 @@ All endpoints return JSON unless noted.
 | `POST` | `/api/token` | `{"token":"…"}` — save GitHub API token to NVS |
 | `POST` | `/api/bm/sync` | Fetch bambuman.ee ZIP central directory → save `/BM/catalog.json` |
 | `GET` | `/api/bm/catalog` | Stream `/BM/catalog.json` from FAT |
-| `GET` | `/api/bm/fetch?uid=XXXXXXXX` | Fetch `data.bin` from bambuman.ee → `/BM/<UID>.bin` |
+| `GET` | `/api/bm/fetch?uid=XXXXXXXX[&mat=…&type=…&color=…]` | Fetch `data.bin` → structured path (catalog lookup if m/t/c omitted; `/BM/` fallback) |
+| `GET` | `/api/bm/list` | Return `[{path, size}]` of all BambuMan-downloaded files (from `/BM/index.txt`, stale entries pruned) |
 
 ---
 
@@ -379,8 +380,10 @@ Downloaded dump files are stored in a directory tree that mirrors the GitHub rep
 |--------|----------|
 | GitHub: `PLA/PLA Basic/Black/3AD82DAD/dump.bin` | `/PLA/PLA_BASIC/BLACK/3AD82DAD.bin` |
 | GitHub: `ABS/ABS Basic/Red/F1A2B3C4/dump.json` | `/ABS/ABS_BASIC/RED/F1A2B3C4.bin` |
-| BambuMan: UID `9510C2A3` | `/BM/9510C2A3.bin` |
+| BambuMan: material PLA, type PLA_BASIC, color Black, UID `9510C2A3` | `/PLA/PLA_BASIC/BLACK/9510C2A3.bin` |
+| BambuMan: UID only (catalog miss / Fetch by UID) | `/BM/9510C2A3.bin` |
 | BambuMan catalog index | `/BM/catalog.json` |
+| BambuMan download index | `/BM/index.txt` |
 | Manual web upload | `/<filename>.bin` (flat at root) |
 
 ---
@@ -445,13 +448,14 @@ To disable all debug output and save flash/RAM:
 /                                    — manually uploaded files
   my_custom_dump.bin
   BM/
-    catalog.json                     — bambuman.ee catalog (sync once from web UI)
-    9510C2A3.bin                     — fetched via BambuMan OLED browser or web UI
-    3AD82DAD.bin
+    catalog.json                     — bambuman.ee catalog (sync once from web UI or OLED)
+    index.txt                        — list of all BambuMan-downloaded file paths
+    9510C2A3.bin                     — fallback: Fetch by UID when catalog lookup fails
   PLA/
     PLA_BASIC/
       BLACK/
-        3AD82DAD.bin                 — downloaded via OLED or web Dumps tab
+        3AD82DAD.bin                 — downloaded via OLED GitHub browser or web Dumps tab
+        9510C2A3.bin                 — downloaded via OLED BambuMan browser or web BambuMan tab
       RED/
         F1A2B3C4.bin
   ABS/
