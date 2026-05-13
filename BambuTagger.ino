@@ -1011,6 +1011,7 @@ a:hover{text-decoration:none;color:#efefef;}
 .content{max-width:700px;margin:20px auto;padding:0 16px}
 .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;margin-bottom:16px}
 .card h3{color:#58a6ff;margin-bottom:12px;font-size:1em}
+.card h4{color:#58a6ff;margin-bottom:12px;font-size:0.8em}
 label{display:block;font-size:.8em;color:#8b949e;margin:8px 0 3px}
 input[type=text],input[type=password],select{width:100%;padding:8px 10px;border-radius:6px;border:1px solid #30363d;background:#0d1117;color:#c9d1d9;font-size:.9em}
 input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
@@ -1058,26 +1059,41 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
 <!-- ── WIFI TAB ─────────────────────────────────────────── -->
 <div id="tab-wifi" class="hidden">
   <div class="card">
-    <h3>WiFi Configuration</h3>
+    <h3>Configuration</h3>
+    <p style="font-size:.85em;color:#8b949e;margin:0 0 12px">
+      Configure WiFi and GitHub API token..
+    </p>
+  </div>
+  <div class="card">
+    <h4>WiFi Configuration</h4>
     <div id="wstatus" class="status info">Checking…</div>
     <label>Network (SSID)</label>
     <input type="text" id="wifi-ssid" placeholder="Your WiFi name">
     <label>Password</label>
     <input type="password" id="wifi-pass" placeholder="Password (leave blank if open)">
-    <label style="margin-top:12px">GitHub API Token <span style="color:#8b949e;font-size:.8em">(optional &mdash; avoids rate&nbsp;limits)</span></label>
-    <input type="password" id="gh-token" placeholder="ghp_…" autocomplete="off">
-    <br><br>
+    <br>
     <button class="btn btn-primary" onclick="saveWifi()">💾 Save &amp; Connect</button>
-    <button class="btn btn-secondary" onclick="saveToken()">🔑 Save Token</button>
     <button class="btn btn-secondary" onclick="scanNets()">🔍 Scan</button>
     <div id="nets" style="margin-top:10px"></div>
+  </div>
+  <div class="card">
+    <h4>GitHub API Token</h4>
+    <label style="margin-top:12px">GitHub API Token <span style="color:#8b949e;font-size:.8em">(optional &mdash; avoids rate&nbsp;limits)</span></label>
+    <input type="password" id="gh-token" placeholder="ghp_…" autocomplete="off">
+    <br>
+    <button class="btn btn-secondary" onclick="saveToken()">🔑 Save Token</button>
   </div>
 </div>
 
 <!-- ── GITHUB TAB ────────────────────────────────────────── -->
 <div id="tab-github" class="hidden">
   <div class="card">
-    <h3>Browse Bambu Lab RFID Library</h3>
+    <h3>GitHub Library</h3>
+    <p style="font-size:.85em;color:#8b949e;margin:0 0 12px">
+      NFC dumps from Bambu-Lab-RFID-Library.
+    </p>
+  </div>
+  <div class="card">
     <div class="breadcrumb" id="crumb">
       <a onclick="githubNav('')">Root</a>
     </div>
@@ -1088,10 +1104,15 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
 
 <!-- ── LOCAL FILES TAB ───────────────────────────────────── -->
 <div id="tab-local">
-
+  <div class="card">
+    <h3>Local Library</h3>
+    <p style="font-size:.85em;color:#8b949e;margin:0 0 12px">
+      Upload, browse and write tags from local library.
+    </p>
+  </div>
   <!-- Upload card -->
   <div class="card">
-    <h3>Upload Dump File</h3>
+    <h4>Upload Dump File</h4>
     <div id="drop-zone"
          ondragover="event.preventDefault();this.classList.add('drag-over')"
          ondragleave="this.classList.remove('drag-over')"
@@ -1105,7 +1126,7 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
 
   <!-- File list card -->
   <div class="card">
-    <h3>Stored Dump Files</h3>
+    <h4>Stored Dump Files</h4>
     <div class="breadcrumb" id="local-crumb"><a onclick="loadLocal('/')" style="cursor:pointer">Root</a></div>
     <div id="local-list"><div class="status info">Loading…</div></div>
     <button class="btn btn-secondary" style="margin-top:8px" onclick="loadLocal()">↻ Refresh</button>
@@ -1116,12 +1137,14 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
 
 <!-- ── BAMBUMAN TAB ─────────────────────────────────────── -->
 <div id="tab-bambuman" class="hidden">
-  <div class="section-title">BambuMan Library</div>
-  <p style="font-size:.85em;color:#8b949e;margin:0 0 12px">
-    2,600+ community NFC dumps from
-    <a href="https://bambuman.ee/tags" target="_blank" style="color:#58a6ff">bambuman.ee</a>.
-    Sync the catalog once, then search by material or color name.
-  </p>
+   <div class="card">
+    <h3>BambuMan Library</h3>
+    <p style="font-size:.85em;color:#8b949e;margin:0 0 12px">
+      2,600+ community NFC dumps from
+      <a href="https://bambuman.ee/tags" target="_blank" style="color:#58a6ff">bambuman.ee</a>.<br>
+      Sync the catalog once, then search by material or color name.
+    </p>
+  </div>
 
   <!-- Sync -->
   <div class="card" style="margin-bottom:10px">
@@ -1162,15 +1185,22 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
     <div id="bm-status" style="margin-top:6px"></div>
   </div>
 </div>
+
 <!-- ── STATUS TAB ────────────────────────────────────────── -->
 <div id="tab-status" class="hidden">
   <div class="card">
-    <h3>Device Status</h3>
+    <h3>Status</h3>
+    <p style="font-size:.85em;color:#8b949e;margin:0 0 12px">
+      Device Status and last read Tag.
+    </p>
+  </div>
+  <div class="card">
+    <h4>Device Status</h4>
     <div id="dev-status"><div class="status info">Loading…</div></div>
     <button class="btn btn-secondary" style="margin-top:8px" onclick="loadStatus()">↻ Refresh</button>
   </div>
   <div class="card" id="last-tag-card" style="display:none">
-    <h3>Last Read Tag</h3>
+    <h4>Last Read Tag</h4>
     <table class="tag-table" id="tag-table"></table>
   </div>
 </div>
