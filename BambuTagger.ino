@@ -1156,12 +1156,6 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
     </div>
     <div id="bm-status" style="margin-top:6px"></div>
   </div>
-
-  <!-- Downloaded -->
-  <div class="section-title" style="margin-top:14px">
-    Downloaded files <span id="bm-count" style="font-weight:normal;font-size:.8em;color:#8b949e"></span>
-  </div>
-  <div id="bm-list"></div>
 </div>
 <!-- ── STATUS TAB ────────────────────────────────────────── -->
 <div id="tab-status" class="hidden">
@@ -1280,9 +1274,6 @@ function bmSearch() {
         '<button class=\"btn\" style=\"padding:2px 7px;font-size:.75em;margin-right:3px\"' +
         'onclick=\"bmFetchEntry(\'' + e.u + '\',\'' + e.m.replace('/g','\\') + '\',\'' + e.t.replace('/g','\\') + '\',\'' + e.c.replace('/g','\\') + '\')\">' +
         '\u2B07 Download</button>' +
-        '<button class=\"btn\" style=\"padding:2px 7px;font-size:.75em;background:#2196F3;color:#fff\"' +
-        'onclick=\"writeTagFromFile(\'' + fp + '\')\">' +
-        '\u270F Write</button>' +
         '</td></tr>';
     }).join('') + '</tbody></table>' +
     (filtered.length > 100
@@ -1363,13 +1354,6 @@ function loadBmList() {
       }).join('');
     })
     .catch(() => {});
-}
-
-function bmDelFile(path) {
-  if (!confirm('Delete ' + path + '?')) return;
-  fetch('/api/delete', {method:'POST', headers:{'Content-Type':'application/json'},
-                        body: JSON.stringify({file: path})})
-    .then(() => loadBmList());
 }
 
 // ── WiFi ────────────────────────────────────────────────────
@@ -2064,7 +2048,7 @@ void apiFiles() {
       int sl = fn.lastIndexOf('/');
       String bn = (sl >= 0) ? fn.substring(sl + 1) : fn;
       bool isDir = f.isDirectory();
-      if (isDir || bn.endsWith(".bin")) {
+      if ((isDir || bn.endsWith(".bin")) && !bn.endsWith("BM")) {
         JsonObject o = arr.createNestedObject();
         o["name"] = bn;
         o["isDir"] = isDir;
