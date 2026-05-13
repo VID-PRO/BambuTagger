@@ -552,14 +552,14 @@ bool rfidReadBambuTag(TagInfo* t) {
    Tries the default 0xFF key first (blank factory card), then
    the key embedded in the dump (for already-keyed sectors).
    Pass isMagicCard=true to also write block 0 (UID). */
-bool rfidWriteDump(const uint8_t* buf, bool isMagicCard) {
+bool rfidWriteDump(uint8_t* uid, const uint8_t* buf, bool isMagicCard) {
   if (!rfid.PICC_IsNewCardPresent()) {
-    DBGF("[WRITE] PICC_IsNewCardPresent FAIL");
-    return false;
+    DBGF("[WRITE] PICC_IsNewCardPresent FAIL\n");
+    //return false;
   }
   if (!rfid.PICC_ReadCardSerial()) {
-    DBGF("[WRITE] PICC_ReadCardSerial FAIL");
-    return false;
+    DBGF("[WRITE] PICC_ReadCardSerial FAIL\n");
+    //return false;
   }
 
   MFRC522::MIFARE_Key kDef;
@@ -574,8 +574,24 @@ bool rfidWriteDump(const uint8_t* buf, bool isMagicCard) {
     MFRC522::MIFARE_Key kDump;
     memcpy(kDump.keyByte, buf + trailer * BYTES_PER_BLOCK, 6);
 
-    bool authed = tryAuth(trailer, &kDef, true)
+    // Build auth key objects
+    uint8_t keysA[16][6], keysB[16][6];
+    bambuDeriveKeys(uid, keysA, keysB);
+    DBGLN("[RFID] Key derivation complete.");
+    MFRC522::MIFARE_Key mk;
+    MFRC522::MIFARE_Key kA, kB, kDef;
+    memcpy(kA.keyByte, keysA[sec], 6);
+    memcpy(kB.keyByte, keysB[sec], 6);
+    memset(kDef.keyByte, 0xFF, 6);
+
+    // bool authed = tryAuth(trailer, &kDef, true)
+    //               || tryAuth(trailer, &kDump, true);
+
+    bool authed = tryAuth(trailer, &kA, true)
+                  || tryAuth(trailer, &kB, false)
+                  || tryAuth(trailer, &kDef, true)
                   || tryAuth(trailer, &kDump, true);
+
     DBGF("[WRITE] sector %02d auth -> %s\n", sec, authed ? "OK" : "FAIL");
     if (!authed) continue;
 
@@ -3909,7 +3925,11 @@ void processCloneTarget() {
            rfid.uid.uidByte[2], rfid.uid.uidByte[3]);
       ledSet(255, 255, 0);  // yellow = writing in progress
       showStatus("Writing\x85");
-      bool ok = rfidWriteDump(dumpBuf, true);
+
+      uint8_t uidtemp[6];
+      memset(uidtemp, 0xFF, 6);
+
+      bool ok = rfidWriteDump(uidtemp, dumpBuf, true);
       DBGF("[CLONE] Write result: %s\n", ok ? "OK" : "FAIL");
       if (ok) {
         ledFlash(0, 255, 0, 3);  // 3× green = success
@@ -3955,7 +3975,7 @@ void processDumpWrite() {
            rfid.uid.uidByte[2], rfid.uid.uidByte[3]);
       ledSet(255, 255, 0);  // yellow = writing
       showStatus("Writing dump\x85");
-      bool ok = rfidWriteDump(dumpBuf, true);
+      bool ok = rfidWriteDump(preview.uid, dumpBuf, true);
       DBGF("[DUMP]  Write result: %s\n", ok ? "OK" : "FAIL");
       if (ok) {
         ledFlash(0, 255, 0, 3);  // 3× green = success
