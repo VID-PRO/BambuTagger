@@ -262,7 +262,7 @@ AppState appState = S_MAIN_MENU;
 static const char* MENU_ITEMS[] = {
   "1 Read Tag",
   "2 Clone Tag",
-  "3 Write Dump",
+  "3 Write Tag",
   "4 GitHub Lib",
   "5 BambuMan Lib",
   "6 WiFi / Web"
@@ -869,7 +869,7 @@ void drawFatBrowser() {
   oledClear();
 
   // Title: last segment of current path, or "Select Dump" at root
-  String title = "Select Dump";
+  String title = "Select Tag";
   if (fatDepth > 0) {
     int sl = fatCurPath.lastIndexOf('/');
     title = (sl >= 0 && sl < (int)fatCurPath.length() - 1)
@@ -1048,7 +1048,7 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
 <body>
 <div class="nav">
   <h1><img style="vertical-align:middle" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgAgMAAAAOFJJnAAABhWlDQ1BJQ0MgcHJvZmlsZQAAKJF9kb9Lw0AcxV9bS6VUHawg4pChOrWLijiWKhbBQmkrtOpgcukvaNKQpLg4Cq4FB38sVh1cnHV1cBUEwR8g/gHipOgiJX4vKbSI8eC4D+/uPe7eAd5WjSlGXxxQVFPPJBNCvrAqBF7hRxAjGERUZIaWyi7m4Dq+7uHh612MZ7mf+3MMyEWDAR6BOM403STeIJ7dNDXO+8RhVhFl4nPiqE4XJH7kuuTwG+eyzV6eGdZzmXniMLFQ7mGph1lFV4hniCOyolK+N++wzHmLs1JrsM49+QtDRXUly3Wa40hiCSmkIUBCA1XUYCJGq0qKgQztJ1z8Y7Y/TS6JXFUwciygDgWi7Qf/g9/dGqXpKScplAD8L5b1MQEEdoF207K+jy2rfQL4noErteuvt4C5T9KbXS1yBAxtAxfXXU3aAy53gNEnTdRFW/LR9JZKwPsZfVMBGL4FgmtOb519nD4AOepq+QY4OAQmy5S97vLu/t7e/j3T6e8HrYRyvp7c8c0AAAAJUExURXIA83m/boC9efRkY8YAAAABdFJOUwBA5thmAAAAAWJLR0QAiAUdSAAAAL1JREFUGNNNkLEKg0AMhv8GHO52H0FR36SbCJHD6XASn+Lazb1XHG8R1Kds7kqLgZAvGZL/D3CJbXCp1sxTAs/cx5HmvWErUJhvYgsA9QJv6AAvzUqeXe5Au5qPNrMyL4GXslCuAppbK4B6AhkUDr6PUDpYBQiUgZw2Bs02KJsn4KVjgWLh+8idQbawVTwaqGeERwttfZv1coKMXrMgR2lFVcX9f2GIm5PUwpBL4omPOdlJBpNT9bOM87y+5AM/WTesHvLO9wAAAABJRU5ErkJggg=="> BambuTagger</h1>
-  <div class="pill active"  id="tab-local-btn"  onclick="switchTab('local')">Files</div>
+  <div class="pill active"  id="tab-local-btn"  onclick="switchTab('local')">Local Library</div>
   <div class="pill"         id="tab-github-btn"   onclick="switchTab('github')">GitHub Library</div>
   <div class="pill"         id="tab-bambuman-btn" onclick="switchTab('bambuman')">BambuMan Library</div>
   <div class="pill"         id="tab-status-btn" onclick="switchTab('status')">Status</div>
@@ -1071,17 +1071,17 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
     <input type="text" id="wifi-ssid" placeholder="Your WiFi name">
     <label>Password</label>
     <input type="password" id="wifi-pass" placeholder="Password (leave blank if open)">
-    <br>
-    <button class="btn btn-primary" onclick="saveWifi()">💾 Save &amp; Connect</button>
-    <button class="btn btn-secondary" onclick="scanNets()">🔍 Scan</button>
+    <br><br>
+    <button class="btn" onclick="saveWifi()">💾 Save &amp; Connect</button>
+    <button class="btn" onclick="scanNets()">🔍 Scan</button>
     <div id="nets" style="margin-top:10px"></div>
   </div>
   <div class="card">
     <h4>GitHub API Token</h4>
     <label style="margin-top:12px">GitHub API Token <span style="color:#8b949e;font-size:.8em">(optional &mdash; avoids rate&nbsp;limits)</span></label>
     <input type="password" id="gh-token" placeholder="ghp_…" autocomplete="off">
-    <br>
-    <button class="btn btn-secondary" onclick="saveToken()">🔑 Save Token</button>
+    <br><br>
+    <button class="btn" onclick="saveToken()">🔑 Save Token</button>
   </div>
 </div>
 
@@ -1090,7 +1090,7 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
   <div class="card">
     <h3>GitHub Library</h3>
     <p style="font-size:.85em;color:#8b949e;margin:0 0 12px">
-      NFC dumps from Bambu-Lab-RFID-Library.
+      Tags from <a href="" target="_blank"  style="color:#58a6ff">Bambu-Lab-RFID-Library</a>.<br>
     </p>
   </div>
   <div class="card">
@@ -1112,7 +1112,7 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
   </div>
   <!-- Upload card -->
   <div class="card">
-    <h4>Upload Dump File</h4>
+    <h4>Upload Tag File</h4>
     <div id="drop-zone"
          ondragover="event.preventDefault();this.classList.add('drag-over')"
          ondragleave="this.classList.remove('drag-over')"
@@ -1126,10 +1126,10 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
 
   <!-- File list card -->
   <div class="card">
-    <h4>Stored Dump Files</h4>
+    <h4>Stored Tag Files</h4>
     <div class="breadcrumb" id="local-crumb"><a onclick="loadLocal('/')" style="cursor:pointer">Root</a></div>
     <div id="local-list"><div class="status info">Loading…</div></div>
-    <button class="btn btn-secondary" style="margin-top:8px" onclick="loadLocal()">↻ Refresh</button>
+    <button class="btn" style="margin-top:8px" onclick="loadLocal()">↻ Refresh</button>
   </div>
 
 </div>
@@ -1140,7 +1140,7 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
    <div class="card">
     <h3>BambuMan Library</h3>
     <p style="font-size:.85em;color:#8b949e;margin:0 0 12px">
-      2,600+ community NFC dumps from
+      2,600+ community tags from
       <a href="https://bambuman.ee/tags" target="_blank" style="color:#58a6ff">bambuman.ee</a>.<br>
       Sync the catalog once, then search by material or color name.
     </p>
@@ -1512,7 +1512,7 @@ function loadLocal(dir) {
     document.getElementById('local-crumb').innerHTML = crumb;
     const entries = data.entries || [];
     if(!entries.length && localPath==='/'){
-      document.getElementById('local-list').innerHTML='<div class="status info">No dumps yet. Use the Library tab.</div>';
+      document.getElementById('local-list').innerHTML='<div class="status info">No tags yet. Use the Library tab.</div>';
       return;
     }
     let html = '';
@@ -1614,7 +1614,7 @@ function loadStatus() {
         <tr><td>Mode</td><td>${d.ap_mode?'Access Point (AP)':'Station (STA)'}</td></tr>
         <tr><td>Free Heap</td><td>${d.heap} bytes</td></tr>
         <tr><td>FAT</td><td>${d.fat_used} / ${d.fat_total} bytes</td></tr>
-        <tr><td>Selected dump</td><td>${d.selected_dump||'— none —'}</td></tr>
+        <tr><td>Selected Tag</td><td>${d.selected_dump||'— none —'}</td></tr>
       </table>`;
 
     if(d.last_tag && d.last_tag.valid) {
@@ -4038,7 +4038,7 @@ void handleFatBrowserEncoder() {
     if (!f || f.size() != DUMP_SIZE) {
       DBGF("[DUMP]  Bad file: size=%u expected=%u\n",
            f ? (unsigned)f.size() : 0, DUMP_SIZE);
-      showStatus("Bad dump file!\n\nClick to return");
+      showStatus("Bad tag file!\n\nClick to return");
       appState = S_WIFI_INFO;
       return;
     }
@@ -4051,7 +4051,7 @@ void handleFatBrowserEncoder() {
     flatToTag(dumpBuf, &preview);
     char msg[128];
     snprintf(msg, sizeof(msg),
-             "Write dump:%s\n%s\n#%0lX%0lX%0lX\n\nPlace blank card",
+             "Write tag:%s\n%s\n#%0lX%0lX%0lX\n\nPlace blank card",
              preview.filamentType, preview.detailedType,
              preview.colorR, preview.colorG, preview.colorB);
     showStatus(msg);
@@ -4199,7 +4199,7 @@ void processDumpWrite() {
            rfid.uid.uidByte[0], rfid.uid.uidByte[1],
            rfid.uid.uidByte[2], rfid.uid.uidByte[3]);
       ledSet(255, 255, 0);  // yellow = writing
-      showStatus("Writing dump\x85");
+      showStatus("Writing tag\x85");
       bool ok = rfidWriteDump(preview.uid, dumpBuf, true);
       DBGF("[DUMP]  Write result: %s\n", ok ? "OK" : "FAIL");
       if (ok) {
