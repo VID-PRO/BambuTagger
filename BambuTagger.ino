@@ -2341,7 +2341,7 @@ void apiBmFetch() {
   if (uid.length() < 4) { fail(400, "uid param required (min 4 hex chars)"); return; }
   if (WiFi.status() != WL_CONNECTED) { fail(503, "WiFi not connected"); return; }
 
-  String url = "https://bambuman.ee/api/tags/" + uid + "/data.bin";
+  String url = "https://bambuman.ee/dl/tags/" + uid + "/data.bin";
   DBGF("[BM]  Fetching %s\n", url.c_str());
 
   WiFiClientSecure wcs;
@@ -3489,7 +3489,7 @@ String bmCatFetchUid(const String& uid) {
   statusLed.setPixelColor(0, statusLed.Color(255, 140, 0));
   statusLed.show();
 
-  String url = "https://bambuman.ee/api/tags/" + uid + "/data.bin";
+  String url = "https://bambuman.ee/dl/tags/" + uid + "/data.bin";
   WiFiClientSecure wcs; wcs.setInsecure();
   HTTPClient http;
   http.begin(wcs, url);
