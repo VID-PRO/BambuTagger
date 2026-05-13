@@ -254,23 +254,12 @@ Fully navigable browser for the FAT file system.
 - **✍️ Write** any `.bin` file directly to an RFID tag: click the button, place a tag on the RC522 within 20 seconds.  A modal overlay shows progress and polls for completion.
 - **Delete** any `.bin` file with the 🗑 button (full path passed to the server).
 
-### Tab 2 — Dumps
+### Tab 2 — GitHub Library
 - Browse the GitHub repository tree by folder path.
 - Click any `.bin` or `.json` dump file to download it directly to FAT.
 - Downloaded files are stored in a directory tree matching the GitHub repo structure (e.g. `/PLA/PLA_BASIC/BLACK/3AD82DAD.bin`).
 
-### Tab 3 — Status
-- Shows current WiFi mode, SSID, and IP address.
-- Shows free heap and FAT usage (total / used bytes).
-- Shows all data from the last read tag.
-
-### Tab 4 — WiFi
-- Shows current WiFi mode, SSID, and IP address.
-- Scan for networks and connect to a new SSID + password.
-- Credentials are saved to ESP32 NVS (via `Preferences`, namespace `wifi`) and restored on every boot — no file is written to FAT.
-- **GitHub API Token** — enter a personal access token (read-only, no scopes required) and click **🔑 Save Token**.  The token is stored in NVS and injected as a `Bearer` header into every GitHub API request.  Leave blank to use unauthenticated access (60 req/hr limit).
-
-### Tab 5 — BambuMan
+### Tab 3 — BambuMan Library
 Browse and search the [bambuman.ee](https://bambuman.ee/tags) community tag database without leaving the web UI.
 
 #### Sync Catalog
@@ -291,8 +280,16 @@ Click **🔄 Sync Catalog** to fetch the bambuman.ee file index.  The ESP32 send
 #### Fetch by UID
 Enter a known UID directly and click **⬇ Fetch** to retrieve `data.bin` from `https://bambuman.ee/api/tags/{UID}/data.bin`.  The server tries to resolve the material/type/color from the catalog first; if found the file is placed in the structured tree (`/{MAT}/{TYPE}/{COLOR}/{UID}.bin`), otherwise it falls back to `/BM/{UID}.bin`.
 
-#### Downloaded files
-Lists all BambuMan-downloaded files (read from `/BM/index.txt`) with **✍️ Write** and **🗑 Delete** buttons.  Stale index entries (file deleted from FAT) are pruned automatically on each listing.
+### Tab 4 — Status
+- Shows current WiFi mode, SSID, and IP address.
+- Shows free heap and FAT usage (total / used bytes).
+- Shows all data from the last read tag.
+
+### Tab 5 — Config
+- Shows current WiFi mode, SSID, and IP address.
+- Scan for networks and connect to a new SSID + password.
+- Credentials are saved to ESP32 NVS (via `Preferences`, namespace `wifi`) and restored on every boot — no file is written to FAT.
+- **GitHub API Token** — enter a personal access token (read-only, no scopes required) and click **🔑 Save Token**.  The token is stored in NVS and injected as a `Bearer` header into every GitHub API request.  Leave blank to use unauthenticated access (60 req/hr limit).
 
 ---
 
