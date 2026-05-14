@@ -166,7 +166,7 @@ Row 0 of the list is always a navigation shortcut:
 
 | Encoder action | Result |
 |----------------|--------|
-| Rotate | Move cursor up / down |
+| Rotate | Move cursor up / down (wraps: past last entry → entry 1; past entry 1 → last entry) |
 | Click `<< MENU` (root) | Return to main menu |
 | Click `< BACK` (sub-dir) | Go up one level |
 | Click on `> DIRNAME` | Enter that subdirectory |
@@ -180,20 +180,33 @@ Row 0 of the list is always a navigation shortcut:
 ### 4 · GitHub Lib
 Browse the [Bambu Lab RFID Library](https://github.com/queengooborg/Bambu-Lab-RFID-Library) repository **directly on the OLED** — no PC required.  Requires WiFi (STA) connectivity.
 
+Every level has a direct `<< MENU` shortcut.  At the root, row 0 is `<< MENU`.  Inside any subdirectory, row 0 is `< BACK` (go up one level) and row 1 is `<< MENU` (return to main menu).
+
 ```
 [root]
+  Row 0: << MENU
   └─ PLA/
+        Row 0: < BACK
+        Row 1: << MENU
         └─ PLA Basic/
+              Row 0: < BACK
+              Row 1: << MENU
               └─ Black/
+                    Row 0: < BACK
+                    Row 1: << MENU
                     └─ 3AD82DAD/
+                          Row 0: < BACK
+                          Row 1: << MENU
                           └─ dump.json  ← click to download
 ```
 
 | Encoder action | Result |
 |----------------|--------|
-| Rotate | Move cursor |
+| Rotate | Move cursor up / down |
+| Click `<< MENU` (root) | Return to main menu |
+| Click `< BACK` (sub-level row 0) | Go up one directory level |
+| Click `<< MENU` (sub-level row 1) | Return to main menu directly |
 | Click on folder | Navigate into it |
-| Click **\< BACK** | Go up one level in the GitHub tree |
 | Click on file | Download & save to FAT |
 
 Files are saved to FAT mirroring the GitHub repository directory structure:
@@ -215,15 +228,27 @@ Browse the [bambuman.ee](https://bambuman.ee/tags) community tag database **dire
 
 #### Catalog hierarchy
 
-At the **Material level** (top), two fixed rows always appear before any material entries:
+Every level has a direct `<< MENU` shortcut at the top.
+
+At the **Material level** (top), two fixed rows appear before any material entries:
 
 ```
-<< MENU
-> Sync Catalog          ← sync the catalog without leaving the OLED
+<< MENU            ← return to main menu
+> Sync Catalog     ← sync the catalog without leaving the OLED
 PLA
 PETG
 ABS
 TPU
+…
+```
+
+At **Type / Color / UID levels**, two fixed rows appear before entries:
+
+```
+< BACK             ← go up one level
+<< MENU            ← return to main menu directly
+PLA_BASIC
+PLA_MATTE
 …
 ```
 
@@ -241,9 +266,9 @@ Material (PLA, PETG, ABS, TPU …)
 | Encoder action | Result |
 |----------------|--------|
 | Rotate | Move cursor up / down |
-| Click `<< MENU` (Material level) | Return to main menu |
-| Click `> Sync Catalog` (Material level) | Run catalog sync on-device (see below) |
-| Click `< BACK` (deeper levels) | Go up one level |
+| Click `<< MENU` (any level) | Return to main menu |
+| Click `> Sync Catalog` (Material level, row 1) | Run catalog sync on-device (see below) |
+| Click `< BACK` (Type / Color / UID level, row 0) | Go up one level |
 | Click a Material / Type / Color | Navigate into it |
 | Click a UID | Fetch `data.bin` from bambuman.ee → save to `/{MAT}/{TYPE}/{COLOR}/{UID}.bin` |
 | Click after a successful fetch | Enter RFID write flow immediately |

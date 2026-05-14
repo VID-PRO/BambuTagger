@@ -3270,12 +3270,13 @@ void drawGhBrowser() {
   oled.setTextColor(SH110X_WHITE);
 
   // ── Entry list ────────────────────────────────────────────
-  // Visible rows = 3 (rows at y=14, 26, 38)
-  // Row 0 at depth>0 is always "[BACK]"
-  bool hasBack = (ghDepth > 0);
-  int totalRows = ghCount + (hasBack ? 1 : 0);
+  // Row layout (mirrors FAT/BambuMan browsers):
+  //   Depth 0:  idx 0 = "<< MENU"           idx 1+ = entries
+  //   Depth 1+: idx 0 = "< BACK"  idx 1 = "<< MENU"  idx 2+ = entries
+  int headerRows = (ghDepth == 0) ? 1 : 2;
+  int totalRows  = ghCount + headerRows;
 
-  if (totalRows == 0) {
+  if (totalRows == headerRows) {
     oled.setTextSize(1);
     oled.setCursor(0, 16);
     oled.print("  (empty)");
@@ -3292,10 +3293,12 @@ void drawGhBrowser() {
 
     String label;
     bool isDir = true;
-    if (hasBack && idx == 0) {
-      label = "<BACK";
+    if (idx == 0) {
+      label = (ghDepth == 0) ? "<< MENU" : "< BACK";
+    } else if (idx == 1 && ghDepth > 0) {
+      label = "<< MENU";
     } else {
-      int eIdx = idx - (hasBack ? 1 : 0);
+      int eIdx = idx - headerRows;
       label = String(ghEntries[eIdx].name);
       isDir = ghEntries[eIdx].isDir;
       // Trim long names
@@ -3379,41 +3382,47 @@ void enterGhBrowse(const String& repoPath, bool push) {
 
 // Handle encoder input while in S_GH_BROWSE
 void handleGhBrowseEncoder() {
-  bool hasBack = (ghDepth > 0);
-  int totalRows = ghCount + (hasBack ? 1 : 0);
+  int headerRows = (ghDepth == 0) ? 1 : 2;
+  int totalRows  = ghCount + headerRows;
 
   int d = encGetDelta();
   if (d != 0) {
     ghSel = constrain(ghSel + d, 0, totalRows - 1);
-    // Keep selection in view
     if (ghSel < ghScroll) ghScroll = ghSel;
-    if (ghSel >= ghScroll + 3) ghScroll = ghSel - 2;
+    if (ghSel >= ghScroll + 4) ghScroll = ghSel - 3;
     drawGhBrowser();
     return;
   }
 
   if (!encGetClick()) return;
 
-  // ── BACK ─────────────────────────────────────────────────
-  if (hasBack && ghSel == 0) {
-    DBGLN("[GH]  BACK");
-    ghDepth--;
-    String parentPath = (ghDepth > 0) ? ghStack[ghDepth - 1] : "";
-    // re-fetch parent without pushing again
-    ghSel = 0;
-    ghScroll = 0;
-    if (parentPath == "") {
+  // ── Row 0: << MENU (root) or < BACK (sub-level) ───────────
+  if (ghSel == 0) {
+    if (ghDepth == 0) {
       enterMainMenu();
       return;
     }
+    // Go up one level
+    DBGLN("[GH]  BACK");
+    ghDepth--;
+    ghSel = 0;
+    ghScroll = 0;
+    // Fetch parent directory (empty string = repo root)
+    String parentPath = (ghDepth > 0) ? ghStack[ghDepth - 1] : "";
     showStatus2("Loading", "Github Library");
     ghFetchDir(parentPath);
     drawGhBrowser();
     return;
   }
 
+  // ── Row 1 at depth > 0: << MENU ───────────────────────────
+  if (ghSel == 1 && ghDepth > 0) {
+    enterMainMenu();
+    return;
+  }
+
   // ── Select entry ──────────────────────────────────────────
-  int eIdx = ghSel - (hasBack ? 1 : 0);
+  int eIdx = ghSel - headerRows;
   if (eIdx < 0 || eIdx >= ghCount) return;
 
   GhEntry& entry = ghEntries[eIdx];
@@ -3625,10 +3634,13 @@ void drawBmCatBrowser() {
   oled.print(title);
   oled.setTextColor(SH110X_WHITE);
 
-  // Row 0: nav; Row 1 (level 0 only): [Sync Catalog]; rest: entries
-  // totalRows = bmCatCount + 1 (nav) + syncExtra (1 at level 0)
-  int syncExtra = (bmCatLevel == 0) ? 1 : 0;
-  int totalRows = bmCatCount + 1 + syncExtra;
+  // Row layout:
+  //   Level 0:   idx 0 = "<< MENU"  idx 1 = "> Sync Catalog"  idx 2+ = entries
+  //   Level 1-3: idx 0 = "< BACK"   idx 1 = "<< MENU"         idx 2+ = entries
+  // In both cases entries start at idx 2, so eIdx = idx - 2.
+  int syncExtra = (bmCatLevel == 0) ? 1 : 0;  // Sync Catalog row at level 0
+  int navExtra  = (bmCatLevel > 0)  ? 1 : 0;  // << MENU row at levels 1-3
+  int totalRows = bmCatCount + 1 + syncExtra + navExtra;
 
   // Hint when no catalog loaded yet
   if (bmCatLevel == 0 && bmCatCount == 0) {
@@ -3649,8 +3661,10 @@ void drawBmCatBrowser() {
       label = (bmCatLevel == 0) ? "<< MENU" : "< BACK";
     } else if (idx == 1 && bmCatLevel == 0) {
       label = "> Sync Catalog";
+    } else if (idx == 1 && bmCatLevel > 0) {
+      label = "<< MENU";
     } else {
-      int eIdx = idx - 1 - syncExtra;
+      int eIdx = idx - 2;  // entries always start at idx 2
       if (eIdx < 0 || eIdx >= bmCatCount) break;
       label = String(bmCatEntries[eIdx].label);
       if (label.length() > 17) label = label.substring(0, 16) + "~";
@@ -4063,8 +4077,9 @@ String bmCatFetchUid(const String& uid) {
 
 // Handle encoder input while in S_BM_CAT_BROWSE
 void handleBmCatEncoder() {
-  int syncExtra = (bmCatLevel == 0) ? 1 : 0;
-  int totalRows = bmCatCount + 1 + syncExtra;
+  int syncExtra = (bmCatLevel == 0) ? 1 : 0;  // Sync Catalog row at level 0
+  int navExtra  = (bmCatLevel > 0)  ? 1 : 0;  // << MENU row at levels 1-3
+  int totalRows = bmCatCount + 1 + syncExtra + navExtra;
   int d = encGetDelta();
   if (d != 0) {
     bmCatSel = constrain(bmCatSel + (d > 0 ? 1 : -1), 0, totalRows - 1);
@@ -4075,7 +4090,7 @@ void handleBmCatEncoder() {
   }
   if (!encGetClick()) return;
 
-  // ── Navigation row ────────────────────────────────────────
+  // ── Row 0: BACK / MENU ────────────────────────────────────
   if (bmCatSel == 0) {
     if (bmCatLevel == 0) {
       enterMainMenu();
@@ -4096,14 +4111,18 @@ void handleBmCatEncoder() {
     return;
   }
 
-  // ── Sync Catalog row (level 0, row 1) ──────────────────────
-  if (bmCatLevel == 0 && bmCatSel == 1) {
-    bmOledSyncCatalog();
+  // ── Row 1: Sync Catalog (level 0) or << MENU (levels 1-3) ──
+  if (bmCatSel == 1) {
+    if (bmCatLevel == 0) {
+      bmOledSyncCatalog();
+    } else {
+      enterMainMenu();   // << MENU shortcut from any sub-level
+    }
     return;
   }
 
-  // ── Entry row ─────────────────────────────────────────────
-  int eIdx = bmCatSel - 1 - syncExtra;
+  // ── Entry row (entries always start at idx 2) ─────────────
+  int eIdx = bmCatSel - 2;
   if (eIdx < 0 || eIdx >= bmCatCount) return;
   const char* sel = bmCatEntries[eIdx].label;
 
