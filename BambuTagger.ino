@@ -2974,9 +2974,17 @@ OtaRelease ghGetLatestRelease() {
   if (err) { DBGF("[OTA]  JSON parse: %s\n", err.c_str()); return rel; }
 
   rel.tag = doc["tag_name"] | "";
-  for (JsonObject asset : doc["assets"].as<JsonArray>()) {
+  // Normalise: strip leading 'v' so "v1.6.0" and "1.6.0" compare equal
+  if (rel.tag.startsWith("v") || rel.tag.startsWith("V"))
+    rel.tag = rel.tag.substring(1);
+
+  JsonArray assets = doc["assets"].as<JsonArray>();
+  DBGF("[OTA]  tag=%s assets=%d\n", rel.tag.c_str(), (int)assets.size());
+
+  for (JsonObject asset : assets) {
     String name = asset["name"] | "";
-    // App binary: ends .bin, not merged / bootloader / partitions
+    DBGF("[OTA]  candidate asset: %s\n", name.c_str());
+    // App binary: ends .bin, not merged / bootloader / partitions / elf
     if (name.endsWith(".bin") &&
         name.indexOf("merged")      < 0 &&
         name.indexOf("bootloader")  < 0 &&
@@ -2984,11 +2992,12 @@ OtaRelease ghGetLatestRelease() {
       rel.dlUrl = asset["browser_download_url"] | "";
       rel.size  = asset["size"] | 0;
       rel.ok    = true;
-      DBGF("[OTA]  asset=%s size=%d\n", name.c_str(), rel.size);
+      DBGF("[OTA]  chosen: %s  size=%d\n", name.c_str(), rel.size);
       break;
     }
   }
-  DBGF("[OTA]  tag=%s ok=%d\n", rel.tag.c_str(), rel.ok);
+  if (!rel.ok)
+    rel.tag = rel.tag + " (no asset)";  // tag carries the hint
   return rel;
 }
 
@@ -3058,13 +3067,6 @@ String otaFlash(const OtaRelease& rel, bool progressOled) {
   }
   DBGF("[OTA]  flash OK — %d bytes written\n", written);
   return "";  // success
-}
-
-void enterMainMenu() {
-  DBGLN("[STATE] -> MAIN_MENU");
-  appState = S_MAIN_MENU;
-  ledOff();
-  drawMenu();
 }
 
 // OLED-driven blocking OTA flow
@@ -3145,14 +3147,19 @@ void apiOtaCheck() {
   } else {
     OtaRelease rel = ghGetLatestRelease();
     if (!rel.ok) {
+      // rel.tag carries hint if release was found but had no asset
       doc["ok"]    = false;
-      doc["error"] = "GitHub API error";
+      doc["error"] = rel.tag.length() ? rel.tag : "GitHub API error";
     } else {
-      doc["ok"]             = true;
-      doc["latest"]         = rel.tag;
-      doc["download_url"]   = rel.dlUrl;
-      doc["size"]           = rel.size;
-      doc["update_available"] = (rel.tag != String("v" FIRMWARE_VERSION));
+      // FIRMWARE_VERSION may or may not carry 'v' — normalise both sides
+      String fwNorm = FIRMWARE_VERSION;
+      if (fwNorm.startsWith("v") || fwNorm.startsWith("V"))
+        fwNorm = fwNorm.substring(1);
+      doc["ok"]               = true;
+      doc["latest"]           = rel.tag;
+      doc["download_url"]     = rel.dlUrl;
+      doc["size"]             = rel.size;
+      doc["update_available"] = (rel.tag != fwNorm);
     }
   }
   String out; serializeJson(doc, out);
@@ -3657,6 +3664,13 @@ void drawGhBrowser() {
   // oled.print(String(ghSel + 1) + "/" + String(totalRows));
 
   oledFlush();
+}
+
+void enterMainMenu() {
+  DBGLN("[STATE] -> MAIN_MENU");
+  appState = S_MAIN_MENU;
+  ledOff();
+  drawMenu();
 }
 
 // Enter the GitHub browser at a given repo path.
