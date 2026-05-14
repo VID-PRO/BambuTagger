@@ -3060,6 +3060,13 @@ String otaFlash(const OtaRelease& rel, bool progressOled) {
   return "";  // success
 }
 
+void enterMainMenu() {
+  DBGLN("[STATE] -> MAIN_MENU");
+  appState = S_MAIN_MENU;
+  ledOff();
+  drawMenu();
+}
+
 // OLED-driven blocking OTA flow
 void processOtaUpdate() {
   if (WiFi.status() != WL_CONNECTED) {
@@ -3650,13 +3657,6 @@ void drawGhBrowser() {
   // oled.print(String(ghSel + 1) + "/" + String(totalRows));
 
   oledFlush();
-}
-
-void enterMainMenu() {
-  DBGLN("[STATE] -> MAIN_MENU");
-  appState = S_MAIN_MENU;
-  ledOff();
-  drawMenu();
 }
 
 // Enter the GitHub browser at a given repo path.
