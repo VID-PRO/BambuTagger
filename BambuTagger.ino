@@ -1395,7 +1395,7 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
   <div class="card">
     <h3>GitHub Library</h3>
     <p style="font-size:.85em;color:#8b949e;margin:0 0 12px">
-      Tags from <a href="" target="_blank"  style="color:#58a6ff">Bambu-Lab-RFID-Library</a>.<br>
+      900+ tags from <a href="" target="_blank"  style="color:#58a6ff">Bambu-Lab-RFID-Library</a>.<br>
     </p>
   </div>
   <div class="card">
@@ -1445,7 +1445,7 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
    <div class="card">
     <h3>BambuMan Library</h3>
     <p style="font-size:.85em;color:#8b949e;margin:0 0 12px">
-      2,600+ community tags from
+      2,600+ tags from
       <a href="https://bambuman.ee/tags" target="_blank" style="color:#58a6ff">bambuman.ee</a>.<br>
       Sync the catalog once, then search by material or color name.
     </p>
