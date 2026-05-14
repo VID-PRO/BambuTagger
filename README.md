@@ -12,12 +12,14 @@ Designed around the MIFARE Classic 1K tags embedded in Bambu Lab spools, with fu
 | **RFID** | Read, clone, and write Bambu Lab MIFARE Classic 1K spool tags |
 | **Gen1A / Gen2 / Gen3 / Gen4 magic card support** | Gen1A: 0x40/0x43 backdoor, all 64 blocks verbatim; Gen4 (GTU/GDM): CF-command backdoor, all 64 blocks verbatim; Gen3 (APDU): block 0 via `90 F0 CC CC` APDU; Gen2 (CUID/FUID): implicit detection via block 0 write |
 | **Key derivation** | HKDF-SHA256 with Bambu Lab salt — no hardcoded keys |
-| **OLED menu** | 6-item navigable menu on a 128×64 SH110X / SH1106G display |
+| **OLED menu** | 7-item navigable menu on a 128×64 SH110X / SH1106G display |
 | **Rotary encoder** | ENC11/KY-040 encoder for scroll + click navigation |
 | **WS2812B LED** | Single addressable LED showing filament colour and status |
 | **Web UI** | Five-tab interface: Files / Dumps / Status / WiFi / BambuMan |
 | **GitHub browser** | Browse & download dump files directly on the OLED (no PC needed) |
 | **GitHub API token** | Optional personal access token for higher API rate limits (5 000 req/hr) |
+| **OTA firmware update** | Check for and flash the latest release from GitHub — both from the OLED menu and the web UI — with live progress bar and automatic reboot |
+| **Firmware version tracking** | `FIRMWARE_VERSION` define keeps the OLED menu, web UI, and OTA check in sync |
 | **BambuMan OLED browser** | Browse the bambuman.ee catalog by Material → Type → Color → UID on the OLED; sync the catalog directly from the OLED without a PC |
 | **BambuMan web search** | Sync catalog, filter by material/color, fetch & write from web UI |
 | **File upload** | Drag-and-drop or file-picker upload of `.bin` dumps to FAT |
@@ -106,8 +108,11 @@ Press and hold, or select **\<\< MENU** (always the first row in any browser) to
 │   4 GitHub Lib  │
 │   5 BambuMan    │
 │   6 WiFi / Web  │
+│   7 OTA Update  │
 └─────────────────┘
 ```
+
+> The menu scrolls — up to 4 items are visible at a time; rotate the encoder past the last visible row to reveal more.
 
 ### 1 · Read Tag
 Hold a spool near the RC522.  The sketch derives MIFARE keys from the tag UID using HKDF-SHA256, authenticates all 16 sectors, and displays filament type, colour, and weight.  The WS2812B LED lights up in the actual filament colour.
@@ -316,6 +321,47 @@ On success the OLED shows **"Done! N entries"** and the LED flashes green — cl
 | `UID not found` | HTTP 404 from bambuman.ee |
 | `Blocked (CF) — try Web UI` | HTTP 403 (Cloudflare) — use the web UI BambuMan tab instead |
 
+### 7 · OTA Update
+Checks the [BambuTagger GitHub releases](https://github.com/VID-PRO/BambuTagger/releases/latest) for a newer firmware version and flashes it over-the-air.  Requires WiFi (STA) connectivity.
+
+#### OLED update flow
+
+```
+Step 1 — Checking…          Step 2a — Up to date          Step 2b — Update available
+┌──────────────────────┐    ┌──────────────────────┐      ┌──────────────────────┐
+│   OTA Firmware       │    │   OTA Firmware       │      │   OTA Firmware       │
+│   1/3 Checking…      │    │   Up to date!        │      │   Update!            │
+│                      │    │   v1.0.0             │      │   Now: v1.0.0        │
+│   [cyan LED]         │    │   [green flash]      │      │   New: v1.0.1        │
+│                      │    │                      │      │   [click]=FLASH      │
+└──────────────────────┘    └──────────────────────┘      │   [enc]=cancel  15 s │
+                                                           └──────────────────────┘
+
+Step 3 — Flashing                      Step 4 — Done
+┌──────────────────────┐               ┌──────────────────────┐
+│   OTA Firmware       │               │   OTA Firmware       │
+│   Flashing...        │               │   Done! Rebooting    │
+│   [████████░░] 72%   │               │                      │
+│   [yellow LED]       │               │   [green flash]      │
+└──────────────────────┘               └──────────────────────┘
+```
+
+| Encoder action | Result |
+|----------------|--------|
+| Click (step 2b confirm screen, within 30 s) | Begin download and flash |
+| Rotate (step 2b confirm screen) | Cancel — return to main menu |
+| 30 s timeout | Same as rotate |
+
+The firmware flashed is `BambuTagger.ino.bin` from the latest GitHub release (app partition only — no need to re-flash bootloader or partition table).  After a successful flash the device reboots automatically.
+
+| Result | LED | Message |
+|--------|-----|---------|
+| Already up to date | 🟢 green flash | `Up to date! vX.Y.Z` |
+| Flashing in progress | 🟡 Pulsing cyan → solid yellow | `Flashing... N%` |
+| Flash success | 🟢 green flash | `Done! Rebooting` |
+| Network error / GitHub error | 🔴 red flash | Error detail on OLED |
+| User cancelled | — | Returns to main menu |
+
 ### 6 · WiFi / Web
 Shows the current IP address (STA or AP).  Open a browser to the displayed address to access the web UI.
 
@@ -371,7 +417,21 @@ Enter a known UID directly and click **⬇ Fetch** to retrieve `data.bin` from `
 - Shows free heap and FAT usage (total / used bytes).
 - Shows all data from the last read tag.
 
-### Tab 5 — Config
+### Tab 5 — OTA Update
+Check for and apply firmware updates without connecting a USB cable.
+
+| UI element | Action |
+|------------|--------|
+| **Current firmware** | Displays the running `FIRMWARE_VERSION` |
+| **🔍 Check for Updates** | Queries `GET /api/ota/check` → shows current and latest version |
+| **⬆️ Flash Update** *(appears only when an update is available)* | `POST /api/ota/update` — streams the app binary, flashes, reboots |
+
+- The **Check** step is read-only and safe to run at any time.
+- The **Flash** step asks for confirmation before downloading.
+- If the device reboots mid-response (successful flash), the JS detects the dropped connection and shows "Device rebooting… reconnect in a few seconds."
+- While flashing, the OLED shows a live progress bar and the LED pulses cyan.
+
+### Tab 6 — Config
 - Shows current WiFi mode, SSID, and IP address.
 - Scan for networks and connect to a new SSID + password.
 - Credentials are saved to ESP32 NVS (via `Preferences`, namespace `wifi`) and restored on every boot — no file is written to FAT.
@@ -400,6 +460,8 @@ All endpoints return JSON unless noted.
 | `GET` | `/api/bm/catalog` | Stream `/BM/catalog.json` from FAT |
 | `GET` | `/api/bm/fetch?uid=XXXXXXXX[&mat=…&type=…&color=…]` | Fetch `data.bin` → caller m/t/c → catalog lookup → `/BM/` fallback |
 | `GET` | `/api/bm/list` | Return `[{path, size}]` of all BambuMan-downloaded files (from `/BM/index.txt`, stale entries pruned) |
+| `GET` | `/api/ota/check` | `{current, latest, update_available, download_url, size, ok}` — compare running firmware to latest GitHub release |
+| `POST` | `/api/ota/update` | Download and flash the latest app binary; responds `{ok:true}` before rebooting (or `{ok:false, error:"…"}` on failure) |
 
 ---
 
@@ -426,6 +488,10 @@ All endpoints return JSON unless noted.
 | Download failure | 🔴 3 × red flash |
 | WiFi STA connected | 💙 Dim cyan |
 | WiFi AP mode | 🟠 Dim amber |
+| OTA — querying GitHub | 🔵 Slow-breathing blue |
+| OTA — downloading / flashing | 🔵 Pulsing cyan → 🟡 solid yellow during flash |
+| OTA — flash success | 🟢 3 × green flash |
+| OTA — flash failure | 🔴 3 × red flash |
 
 ---
 
@@ -583,9 +649,16 @@ A workflow file at `.github/workflows/release.yml` builds and publishes releases
 
 #### Creating a release
 
+Before tagging, update `#define FIRMWARE_VERSION` near the top of `BambuTagger.ino` to match the tag (e.g. `"1.0.1"`).  The OTA check compares the running value against the release tag, so they must match.
+
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+# 1. Update FIRMWARE_VERSION in BambuTagger.ino, commit
+git add BambuTagger/BambuTagger.ino
+git commit -m "Bump to v1.0.1"
+
+# 2. Tag and push — workflow compiles + publishes release automatically
+git tag v1.0.1
+git push origin v1.0.1
 ```
 
 The workflow compiles the sketch on **ESP32 Arduino core 2.0.17** (partition scheme `default_ffat`), merges all binary parts with `esptool.py merge_bin`, and attaches four files to the GitHub release:

@@ -87,6 +87,7 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <FFat.h>
+#include <Update.h>
 #include "mbedtls/md.h"
 #include <vector>
 
@@ -117,6 +118,9 @@
 
 #define AP_SSID "BambuTagger"
 #define AP_PASS "bambu1234"
+
+#define FIRMWARE_VERSION "1.6.0"          // bumped by release workflow tag
+#define OTA_REPO         "VID-PRO/BambuTagger"
 
 #define GITHUB_API_HOST "api.github.com"
 #define GITHUB_RAW_HOST "raw.githubusercontent.com"
@@ -252,7 +256,8 @@ enum AppState {
   S_GH_DOWNLOAD,   // downloading dump file to FAT
   S_BM_BROWSE,     // BambuMan OLED browser (waiting for tag)
   S_BM_DOWNLOAD,   // BambuMan fetch in progress
-  S_BM_CAT_BROWSE  // BambuMan catalog 4-level OLED browser
+  S_BM_CAT_BROWSE, // BambuMan catalog 4-level OLED browser
+  S_OTA_UPDATE     // OTA firmware update flow
 };
 AppState appState = S_MAIN_MENU;
 
@@ -265,9 +270,10 @@ static const char* MENU_ITEMS[] = {
   "3 Write Tag",
   "4 GitHub Lib",
   "5 BambuMan Lib",
-  "6 WiFi / Web"
+  "6 WiFi / Web",
+  "7 OTA Update"
 };
-static const int MENU_COUNT = 6;
+static const int MENU_COUNT = 7;
 int menuSel = 0;
 int menuScroll = 0;
 String bmFetchUid = "";  // UID fetched from BambuMan
@@ -1357,6 +1363,7 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
   <div class="pill"         id="tab-github-btn"   onclick="switchTab('github')">GitHub Library</div>
   <div class="pill"         id="tab-bambuman-btn" onclick="switchTab('bambuman')">BambuMan Library</div>
   <div class="pill"         id="tab-status-btn" onclick="switchTab('status')">Status</div>
+  <div class="pill"         id="tab-ota-btn"    onclick="switchTab('ota')">OTA Update</div>
   <div class="pill"         id="tab-wifi-btn"   onclick="switchTab('wifi')">Config</div>
 </div>
 
@@ -1491,6 +1498,27 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
   </div>
 </div>
 
+<!-- ── OTA TAB ───────────────────────────────────────────── -->
+<div id="tab-ota" class="hidden">
+  <div class="card">
+    <h3>&#x1F504; OTA Firmware Update</h3>
+    <p style="font-size:.85em;color:#8b949e;margin:0 0 12px">
+      Fetch and flash the latest firmware release from
+      <a href="https://github.com/VID-PRO/BambuTagger" target="_blank" style="color:#58a6ff">GitHub</a>
+      over-the-air. The device will reboot after a successful update.
+    </p>
+  </div>
+  <div class="card">
+    <h4>Firmware Version</h4>
+    <p>Current: <strong id="ota-cur">checking…</strong>&nbsp;&nbsp;
+       Latest: <strong id="ota-latest">—</strong></p>
+    <div id="ota-status" class="status info">Click <em>Check for Updates</em> to query GitHub.</div>
+    <br>
+    <button class="btn" onclick="otaCheck()">&#x1F50D; Check for Updates</button>
+    <button class="btn" id="ota-flash-btn" style="display:none" onclick="otaFlashFw()">&#x2B06;&#xFE0F; Flash Update</button>
+  </div>
+</div>
+
 <!-- ── STATUS TAB ────────────────────────────────────────── -->
 <div id="tab-status" class="hidden">
   <div class="card">
@@ -1525,15 +1553,57 @@ let curPath = '';
 let pathStack = [];
 
 function switchTab(name) {
-  ['wifi','github','local','status','bambuman'].forEach(t => {
+  ['wifi','github','local','status','bambuman','ota'].forEach(t => {
     document.getElementById('tab-'+t).classList.toggle('hidden', t!==name);
     document.getElementById('tab-'+t+'-btn').classList.toggle('active', t===name);
   });
   if(name==='github' && curPath==='' && document.getElementById('gh-tree').textContent.includes('Click')) githubNav('');
-  if(name==='local')  loadLocal();
+  if(name==='local')    loadLocal();
   if(name==='bambuman') { loadBmList(); bmLoadCatalog(); }
-  if(name==='status') loadStatus();
-  if(name==='wifi')   loadWifiStatus();
+  if(name==='status')   loadStatus();
+  if(name==='wifi')     loadWifiStatus();
+  if(name==='ota')      otaLoadVersion();
+}
+
+// ── OTA Update ──────────────────────────────────────────────
+function otaLoadVersion() {
+  fetch('/api/ota/check').then(r=>r.json()).then(d=>{
+    document.getElementById('ota-cur').textContent = d.current || '?';
+  }).catch(()=>{});
+}
+function otaCheck() {
+  const st  = document.getElementById('ota-status');
+  const btn = document.getElementById('ota-flash-btn');
+  st.className = 'status info'; st.textContent = 'Querying GitHub…';
+  btn.style.display = 'none';
+  fetch('/api/ota/check').then(r=>r.json()).then(d=>{
+    document.getElementById('ota-cur').textContent = d.current || '?';
+    if(!d.ok){ st.className='status error'; st.textContent='Error: '+(d.error||'unknown'); return; }
+    document.getElementById('ota-latest').textContent = d.latest || '?';
+    if(d.update_available){
+      st.className = 'status success';
+      st.innerHTML = '&#x2B06;&#xFE0F; Update available: <strong>'+d.latest+'</strong>';
+      btn.setAttribute('data-url', d.download_url||'');
+      btn.style.display = '';
+    } else {
+      st.className = 'status success';
+      st.textContent = '\u2705 Already up to date! ('+d.current+')';
+    }
+  }).catch(e=>{ st.className='status error'; st.textContent='Check failed: '+e; });
+}
+function otaFlashFw() {
+  if(!confirm('Flash firmware update? The device will reboot automatically.')) return;
+  const st  = document.getElementById('ota-status');
+  const btn = document.getElementById('ota-flash-btn');
+  st.className = 'status info'; st.textContent = '\u23F3 Downloading and flashing\u2026 do not close this page.';
+  btn.disabled = true;
+  fetch('/api/ota/update',{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(d.ok){ st.className='status success'; st.textContent='\u2705 Update complete! Device is rebooting\u2026'; }
+    else    { st.className='status error';   st.textContent='\u274C Failed: '+(d.error||'unknown'); btn.disabled=false; }
+  }).catch(()=>{
+    // Device rebooted — connection dropped; treat as success
+    st.className='status success'; st.textContent='\u2705 Device rebooting\u2026 reconnect in a few seconds.';
+  });
 }
 
 
@@ -1991,7 +2061,7 @@ void apiStatus() {
   static const char* stateNames[] = {
     "MAIN_MENU", "READ_TAG", "SHOW_TAG", "CLONE_SRC", "CLONE_TGT",
     "DUMP_SELECT", "DUMP_WRITE", "WIFI_INFO", "GH_BROWSE", "GH_DOWNLOAD",
-    "BM_BROWSE", "BM_DOWNLOAD", "BM_CAT_BROWSE"
+    "BM_BROWSE", "BM_DOWNLOAD", "BM_CAT_BROWSE", "OTA_UPDATE"
   };
   doc["app_state"] = stateNames[(int)appState];
 
@@ -2864,6 +2934,249 @@ void apiWriteTag() {
   httpServer.send(200, "application/json", out);
 }
 
+// ──────────────────────────────────────────────────────────────
+//  OTA firmware update  (OLED-driven + web API)
+// ──────────────────────────────────────────────────────────────
+
+struct OtaRelease {
+  String tag;    // e.g. "v1.0.1"
+  String dlUrl;  // HTTPS download URL for the app .bin asset
+  int    size;   // bytes, 0 = unknown
+  bool   ok;     // false = API error / no valid asset
+};
+
+// Fetch latest release metadata from GitHub
+OtaRelease ghGetLatestRelease() {
+  OtaRelease rel; rel.ok = false; rel.size = 0;
+  if (WiFi.status() != WL_CONNECTED) return rel;
+
+  WiFiClientSecure client; client.setInsecure();
+  HTTPClient http;
+  http.begin(client, "https://api.github.com/repos/" OTA_REPO "/releases/latest");
+  ghAddHeaders(http);
+  int code = http.GET();
+  DBGF("[OTA]  releases/latest → HTTP %d\n", code);
+  if (code != 200) { http.end(); return rel; }
+
+  // Filter to keep only needed fields — avoids loading the full JSON body
+  StaticJsonDocument<96> filter;
+  filter["tag_name"] = true;
+  JsonArray fa = filter.createNestedArray("assets");
+  JsonObject fa0 = fa.createNestedObject();
+  fa0["name"]                 = true;
+  fa0["browser_download_url"] = true;
+  fa0["size"]                 = true;
+
+  DynamicJsonDocument doc(8192);
+  DeserializationError err = deserializeJson(
+      doc, http.getStream(), DeserializationOption::Filter(filter));
+  http.end();
+  if (err) { DBGF("[OTA]  JSON parse: %s\n", err.c_str()); return rel; }
+
+  rel.tag = doc["tag_name"] | "";
+  for (JsonObject asset : doc["assets"].as<JsonArray>()) {
+    String name = asset["name"] | "";
+    // App binary: ends .bin, not merged / bootloader / partitions
+    if (name.endsWith(".bin") &&
+        name.indexOf("merged")      < 0 &&
+        name.indexOf("bootloader")  < 0 &&
+        name.indexOf("partition")   < 0) {
+      rel.dlUrl = asset["browser_download_url"] | "";
+      rel.size  = asset["size"] | 0;
+      rel.ok    = true;
+      DBGF("[OTA]  asset=%s size=%d\n", name.c_str(), rel.size);
+      break;
+    }
+  }
+  DBGF("[OTA]  tag=%s ok=%d\n", rel.tag.c_str(), rel.ok);
+  return rel;
+}
+
+// Draw a progress bar on the OLED (pct 0-100)
+void otaDrawProgress(int pct, const char* label) {
+  oled.clearDisplay();
+  oled.setTextSize(1);
+  oled.setCursor(0, 0);  oled.println("OTA Firmware");
+  oled.setCursor(0, 12); oled.println(label);
+  oled.drawRect(4, 36, 120, 10, SH110X_WHITE);
+  int filled = (int)((long)pct * 116 / 100);
+  if (filled > 0) oled.fillRect(6, 38, filled, 6, SH110X_WHITE);
+  char pctStr[8]; snprintf(pctStr, sizeof(pctStr), "%d%%", pct);
+  oled.setCursor(56, 50); oled.print(pctStr);
+  oled.display();
+}
+
+// Internal OTA flash — used by both OLED flow and web API
+// Returns empty string on success, error message on failure
+String otaFlash(const OtaRelease& rel, bool progressOled) {
+  WiFiClientSecure client; client.setInsecure();
+  HTTPClient http;
+  http.begin(client, rel.dlUrl);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  ghAddHeaders(http);
+  int code = http.GET();
+  DBGF("[OTA]  flash GET → HTTP %d\n", code);
+  if (code != 200) {
+    http.end();
+    return "HTTP " + String(code);
+  }
+
+  int totalSize = (rel.size > 0) ? rel.size : http.getSize();
+  DBGF("[OTA]  totalSize=%d\n", totalSize);
+  if (!Update.begin((totalSize > 0) ? (size_t)totalSize : UPDATE_SIZE_UNKNOWN)) {
+    String e = Update.errorString();
+    http.end();
+    return "begin: " + e;
+  }
+
+  WiFiClient* stream = http.getStreamPtr();
+  uint8_t  buf[512];
+  int      written   = 0;
+  unsigned long lastDraw = 0;
+
+  while (http.connected() && (totalSize <= 0 || written < totalSize)) {
+    int avail = stream->available();
+    if (!avail) { delay(2); continue; }
+    int n = stream->readBytes(buf, min(avail, (int)sizeof(buf)));
+    if (n <= 0) break;
+    if (Update.write(buf, n) != (size_t)n) {
+      String e = Update.errorString();
+      http.end(); Update.abort();
+      return "write: " + e;
+    }
+    written += n;
+    if (progressOled && millis() - lastDraw > 200) {
+      int pct = (totalSize > 0) ? (written * 100 / totalSize) : 50;
+      otaDrawProgress(pct, "Flashing...");
+      lastDraw = millis();
+    }
+  }
+  http.end();
+
+  if (!Update.end(true)) {
+    return "end: " + String(Update.errorString());
+  }
+  DBGF("[OTA]  flash OK — %d bytes written\n", written);
+  return "";  // success
+}
+
+// OLED-driven blocking OTA flow
+void processOtaUpdate() {
+  if (WiFi.status() != WL_CONNECTED) {
+    showStatus("OTA Update\n\nNo WiFi!\n\nClick to return.");
+    ledFlash(255, 80, 0, 2);
+    appState = S_WIFI_INFO;
+    return;
+  }
+
+  // 1/3 — Check latest release
+  ledSet(0, 0, 180);
+  showStatus("OTA Update\n\n1/3 Checking\nGitHub...");
+  OtaRelease rel = ghGetLatestRelease();
+
+  if (!rel.ok) {
+    showStatus("OTA Update\n\nCheck failed!\nSee serial log.\n\nClick to return.");
+    ledFlash(255, 0, 0, 2);
+    appState = S_WIFI_INFO;
+    return;
+  }
+
+  // 2/3 — Version compare
+  String current = "v" FIRMWARE_VERSION;
+  if (rel.tag == current) {
+    showStatus(("OTA Update\n\nUp to date!\n" + current + "\n\nClick to return.").c_str());
+    ledFlash(0, 255, 0, 2);
+    appState = S_WIFI_INFO;
+    return;
+  }
+
+  // 3/3 — Prompt
+  String prompt = "Update!\nNow: " + current +
+                  "\nNew: " + rel.tag +
+                  "\n\n[click]=FLASH\n[enc]=cancel";
+  showStatus(prompt.c_str());
+  ledSet(0, 80, 200);
+
+  unsigned long t0 = millis();
+  while (millis() - t0 < 30000) {
+    httpServer.handleClient();
+    encUpdate();
+    if (encGetDelta() != 0) { enterMainMenu(); return; }
+    if (encGetClick())       break;
+    delay(10);
+  }
+  if (millis() - t0 >= 30000) { enterMainMenu(); return; }
+
+  // Flash
+  otaDrawProgress(0, "Starting...");
+  ledSet(255, 200, 0);
+
+  String err = otaFlash(rel, true);
+  if (!err.isEmpty()) {
+    showStatus(("OTA Failed!\n" + err + "\n\nClick to return.").c_str());
+    ledFlash(255, 0, 0, 3);
+    appState = S_WIFI_INFO;
+    return;
+  }
+
+  otaDrawProgress(100, "Done! Rebooting");
+  ledFlash(0, 255, 0, 3);
+  DBGLN("[OTA]  Update complete — rebooting");
+  delay(2000);
+  ESP.restart();
+}
+
+// GET /api/ota/check  — returns current + latest version info
+void apiOtaCheck() {
+  DBGLN("[HTTP]  GET /api/ota/check");
+  DynamicJsonDocument doc(512);
+  doc["current"] = "v" FIRMWARE_VERSION;
+
+  if (WiFi.status() != WL_CONNECTED) {
+    doc["ok"]    = false;
+    doc["error"] = "No WiFi";
+  } else {
+    OtaRelease rel = ghGetLatestRelease();
+    if (!rel.ok) {
+      doc["ok"]    = false;
+      doc["error"] = "GitHub API error";
+    } else {
+      doc["ok"]             = true;
+      doc["latest"]         = rel.tag;
+      doc["download_url"]   = rel.dlUrl;
+      doc["size"]           = rel.size;
+      doc["update_available"] = (rel.tag != String("v" FIRMWARE_VERSION));
+    }
+  }
+  String out; serializeJson(doc, out);
+  httpServer.send(200, "application/json", out);
+}
+
+// POST /api/ota/update  — download and flash, then reboot
+void apiOtaUpdate() {
+  DBGLN("[HTTP]  POST /api/ota/update");
+  OtaRelease rel = ghGetLatestRelease();
+  if (!rel.ok) {
+    httpServer.send(503, "application/json",
+                    "{\"ok\":false,\"error\":\"Could not fetch release info\"}");
+    return;
+  }
+
+  String err = otaFlash(rel, false);
+  if (!err.isEmpty()) {
+    DynamicJsonDocument doc(256);
+    doc["ok"] = false; doc["error"] = err;
+    String out; serializeJson(doc, out);
+    httpServer.send(500, "application/json", out);
+    return;
+  }
+
+  httpServer.send(200, "application/json", "{\"ok\":true}");
+  DBGLN("[OTA]  Web-triggered update complete — rebooting");
+  delay(500);
+  ESP.restart();
+}
+
 void setupHTTPServer() {
   httpServer.on("/", HTTP_GET, []() {
     httpServer.send_P(200, "text/html", INDEX_HTML);
@@ -2882,7 +3195,9 @@ void setupHTTPServer() {
   httpServer.on("/api/bm/fetch", HTTP_GET, apiBmFetch);
   httpServer.on("/api/bm/list", HTTP_GET, apiBmList);
   httpServer.on("/api/bm/sync", HTTP_POST, apiBmSync);
-  httpServer.on("/api/bm/catalog", HTTP_GET, apiBmCatalog);
+  httpServer.on("/api/bm/catalog", HTTP_GET,  apiBmCatalog);
+  httpServer.on("/api/ota/check",  HTTP_GET,  apiOtaCheck);
+  httpServer.on("/api/ota/update", HTTP_POST, apiOtaUpdate);
   httpServer.enableCORS(true);
   httpServer.begin();
   Serial.println("HTTP server started.");
@@ -3488,7 +3803,7 @@ void handleGhBrowseEncoder() {
       flatToTag(dumpBuf, &preview);
       char msg[128];
       snprintf(msg, sizeof(msg),
-               "GitHub OK!\n%.16s\n%.16s\n[click]=WRITE\n[enc]=cancel",
+               "GitHub OK!\n%.16s\n%.16s\n\n[click]=WRITE\n[enc]=cancel",
                preview.filamentType, preview.detailedType);
       showStatus(msg);
 
@@ -4204,7 +4519,7 @@ void handleBmCatEncoder() {
       flatToTag(dumpBuf, &preview);
       char msg[128];
       snprintf(msg, sizeof(msg),
-               "BambuMan OK!\n%.16s\n%.16s\n[click]=WRITE\n[enc]=cancel",
+               "BambuMan OK!\n%.16s\n%.16s\n\n[click]=WRITE\n[enc]=cancel",
                preview.filamentType, preview.detailedType);
       showStatus(msg);
       ledFlash(0, 255, 0, 2);
@@ -4314,6 +4629,7 @@ void handleMenuEncoder() {
         break;
       case 4: enterBmBrowse(); break;
       case 5: enterWifiInfo(); break;
+      case 6: appState = S_OTA_UPDATE; break;
     }
   }
 }
@@ -4737,6 +5053,10 @@ void loop() {
     case S_BM_BROWSE:
     case S_BM_DOWNLOAD:
       processBmBrowse();
+      break;
+
+    case S_OTA_UPDATE:
+      processOtaUpdate();
       break;
 
     default:
