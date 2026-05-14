@@ -10,6 +10,7 @@ Designed around the MIFARE Classic 1K tags embedded in Bambu Lab spools, with fu
 | Category | Details |
 |----------|---------|
 | **RFID** | Read, clone, and write Bambu Lab MIFARE Classic 1K spool tags |
+| **Gen1A / Gen2 / Gen3 / Gen4 magic card support** | Gen1A: 0x40/0x43 backdoor, all 64 blocks verbatim; Gen4 (GTU/GDM): CF-command backdoor, all 64 blocks verbatim; Gen3 (APDU): block 0 via `90 F0 CC CC` APDU; Gen2 (CUID/FUID): implicit detection via block 0 write |
 | **Key derivation** | HKDF-SHA256 with Bambu Lab salt — no hardcoded keys |
 | **OLED menu** | 6-item navigable menu on a 128×64 SH110X / SH1106G display |
 | **Rotary encoder** | ENC11/KY-040 encoder for scroll + click navigation |
@@ -112,10 +113,47 @@ Press and hold, or select **\<\< MENU** (always the first row in any browser) to
 Hold a spool near the RC522.  The sketch derives MIFARE keys from the tag UID using HKDF-SHA256, authenticates all 16 sectors, and displays filament type, colour, and weight.  The WS2812B LED lights up in the actual filament colour.
 
 ### 2 · Clone Tag
-Reads the source tag sector-by-sector into RAM, then prompts for the destination tag.  Writes every block (including sector trailers) to the target tag.  Sector-trailer keys are re-derived for the target UID automatically.
+Reads the source tag sector-by-sector into RAM, then prompts for the destination tag.  Writes every block to the target tag.
+
+**Key handling during clone/write:**
+
+The write routine first attempts to unlock the card via the **Gen1A hardware backdoor** (send `0x40` / `0x43` — a special command accepted only by "magic" MIFARE clone chips).  If the card responds, all 64 blocks are written directly with **no sector authentication required**, including block 0 (normally read-only UID block).  This transparently handles Chinese Gen1A clone cards that were previously written with unknown Bambu keys.
+
+If Gen1A is not detected, the routine probes for **Gen4 (GTU / GDM / USCUID)** cards by sending the version command `CF 00000000 CC` — a genuine Gen4 card responds `00 00 00 02 AA`. If confirmed, all 64 blocks (including block 0 / UID) are written verbatim via `CF <pw> CD` backdoor commands.
+
+If Gen4 is not detected, the routine tries **Gen3 (APDU-based)** cards by sending `90 F0 CC CC 10 <block0>`. A Gen3 card responds `90 00` — this both detects the card type and writes block 0 (UID) atomically. Blocks 1–63 are then written via 3-key normal auth, with trailer keys derived from the dump's UID (which the card now presents).
+
+If Gen3 also fails, the routine enters the **normal-auth path** — which transparently handles **Gen2 / CUID / FUID** cards. These look like standard MIFARE but allow writing block 0 after normal auth. The routine detects this implicitly by attempting `MIFARE_Write` to block 0; on Gen2 it succeeds (UID overwritten), on genuine MIFARE it fails silently.
+
+If none of the above magic paths are detected (genuine MIFARE Classic), the routine falls back to a **3-key normal-auth strategy**:
+
+| Path | Condition | How it works |
+|------|-----------|-------------|
+| **Gen1A backdoor** | Card responds to `0x40` / `0x43` | All 64 blocks written verbatim; block 0 (UID) overwritten |
+| **Gen4 (GTU/GDM)** | Card responds to `CF 00000000 CC` with version `00 00 00 02 AA` | All 64 blocks written verbatim via `CF <pw> CD` commands; block 0 (UID) overwritten |
+| **Gen3 (APDU)** | Card responds `90 00` to APDU `90 F0 CC CC 10 <block0>` | Block 0 written via APDU; blocks 1–63 via 3-key auth; trailers use dump-UID-derived keys |
+| **Gen2 implicit** | Standard MIFARE protocol; block 0 write succeeds after normal auth | Detected during sector 0 write; block 0 overwritten; trailer keys re-derived from dump UID |
+| **Normal auth** | Genuine MIFARE Classic (block 0 read-only) | 3-key trial per sector; trailers re-written with dest-UID-derived keys |
+
+Normal-auth key trial order:
+
+| Priority | Key tried | Succeeds when target is… |
+|----------|-----------|--------------------------|\n| 1 | `FFFFFFFFFFFF` | blank / factory-fresh tag |
+| 2 | Bambu key derived from **dest UID** | previously used Bambu spool |
+| 3 | Bambu key derived from **source UID** | (fallback; rarely needed) |
+
+On the normal-auth path, sector trailers are always written with dest-UID-derived keys so the Bambu printer can authenticate the result correctly.
+
+The write function returns the number of sectors written successfully (0–16).  The OLED and LED show three outcomes:
+
+| Result | LED | Message |
+|--------|-----|---------|
+| 16/16 sectors OK | 🟢 green flash | "Write complete!" |
+| 1–15/16 sectors OK | 🟠 amber flash | "Partial! X/16 sec" |
+| 0/16 sectors | 🔴 red flash | "Write failed!" |
 
 ### 3 · Write Dump
-Browse the dump files stored on FAT using the on-device directory browser.  The browser reflects the real folder tree on the FAT partition (mirroring the GitHub repo structure).  Select a `.bin` file, present a blank/target tag, and every block is written.
+Browse the dump files stored on FAT using the on-device directory browser.  The browser reflects the real folder tree on the FAT partition (mirroring the GitHub repo structure).  Select a `.bin` file, present a target tag, and every block is written using the same Gen1A-backdoor / 3-key auth strategy described above.  Gen1A, Gen4 (GTU/GDM/USCUID), Gen3 (APDU), and Gen2 (CUID/FUID) magic cards are all detected automatically — no special configuration is needed.
 
 #### FAT directory browser
 
@@ -243,7 +281,7 @@ Shows the current IP address (STA or AP).  Open a browser to the displayed addre
 
 Connect to the ESP32's IP (shown on the OLED) in any browser.
 
-### Tab 1 — Files
+### Tab 1 — Local Library
 Fully navigable browser for the FAT file system.
 
 - **Breadcrumb trail** (`Root / PLA / PLA_BASIC / BLACK`) — click any segment to jump directly to that level.
@@ -325,9 +363,14 @@ All endpoints return JSON unless noted.
 | Waiting for tag | 🔵 Slow-breathing blue |
 | Tag read OK | Actual filament colour |
 | Write Dump — preview | Dump's filament colour (dim) |
+| Gen1A backdoor detected | 🔵 Fast single flash blue |
+| Gen2 (CUID/FUID) detected | 🔵 Fast single flash blue |
+| Gen3 (APDU) detected | 🔵 Fast single flash blue |
+| Gen4 (GTU/GDM) detected | 🔵 Fast single flash blue |
 | Writing in progress | 🟡 Solid yellow |
-| Write / clone success | 🟢 3 × green flash |
-| Write / clone failure | 🔴 3 × red flash |
+| Write success (16/16 sectors) | 🟢 3 × green flash |
+| Write partial (1–15/16 sectors) | 🟠 3 × amber flash |
+| Write / clone failure (0/16) | 🔴 3 × red flash |
 | Timeout / no tag | 🔴 2 × red flash |
 | GitHub fetch in progress | 🔵 Fast-breathing blue |
 | GitHub / BambuMan download | 🟡 Solid yellow |
@@ -467,6 +510,8 @@ To disable all debug output and save flash/RAM:
 
 ## Building & Flashing
 
+### Manual build (Arduino IDE)
+
 1. Install the Arduino IDE (≥ 2.x) and the [ESP32 board package](https://docs.espressif.com/projects/arduino-esp32/en/latest/installing.html).
 2. Install all libraries listed above via **Sketch → Include Library → Manage Libraries**.
 3. Open `BambuTagger.ino`.
@@ -475,6 +520,45 @@ To disable all debug output and save flash/RAM:
 6. Open **Tools → Serial Monitor** at 115200 baud to watch the boot log.
 
 > On first boot the FAT partition will be formatted automatically (`FFat.begin(true)`).
+
+### Automated releases (GitHub Actions)
+
+A workflow file at `.github/workflows/release.yml` builds and publishes releases automatically.
+
+#### Trigger conditions
+
+| Event | Compile | Release created |
+|-------|---------|----------------|
+| Push / PR to `main` | ✅ (CI check) | ❌ |
+| Push a `v*` tag | ✅ | ✅ |
+| Manual workflow dispatch | ✅ | only if tagged commit |
+
+#### Creating a release
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The workflow compiles the sketch on **ESP32 Arduino core 2.0.17** (partition scheme `default_ffat`), merges all binary parts with `esptool.py merge_bin`, and attaches four files to the GitHub release:
+
+| File | Flash address | Description |
+|------|--------------|-------------|
+| `BambuTagger_merged.bin` | `0x0` | **All-in-one** — flash this with `esptool write_flash 0x0 BambuTagger_merged.bin` |
+| `BambuTagger.ino.bin` | `0x10000` | App binary only |
+| `BambuTagger.ino.bootloader.bin` | `0x1000` | Bootloader |
+| `BambuTagger.ino.partitions.bin` | `0x8000` | Partition table |
+
+#### Flashing the merged binary (no Arduino IDE needed)
+
+```bash
+pip install esptool
+esptool.py --port /dev/ttyUSB0 --baud 921600 write_flash 0x0 BambuTagger_merged.bin
+```
+
+On Windows replace `/dev/ttyUSB0` with the correct COM port (e.g. `COM3`).
+
+> **Tip:** Arduino library installations and the ESP32 core are cached by the workflow — warm builds finish in ~45 seconds.
 
 ---
 

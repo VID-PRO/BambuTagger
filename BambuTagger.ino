@@ -100,7 +100,7 @@
 #define PIN_ENC_CLK 34
 #define PIN_ENC_DT 35
 #define PIN_ENC_BTN 32
-#define PIN_LED_WS2812 26  // WS2812B data-in pin
+#define PIN_LED_WS2812 26
 
 // ──────────────────────────────────────────────────────────────
 //  Constants
@@ -548,67 +548,345 @@ bool rfidReadBambuTag(TagInfo* t) {
   return true;
 }
 
+// ──────────────────────────────────────────────────────────────
+//  Gen1A ("Chinese magic card") backdoor support
+//  These cards accept a special 0x40/0x43 unlock command that
+//  bypasses all sector authentication, allowing direct block writes.
+// ──────────────────────────────────────────────────────────────
+
+/* Attempt the Gen1A unlock sequence on the currently-selected card.
+   Sends 0x40 at 7-bit frame, then 0x43 at 8-bit frame.
+   Returns true if the card acknowledges both (Gen1A detected).
+   Safe to call on any card; a normal card will NAK/ignore → returns false. */
+static bool gen1aUnlock() {
+  rfid.PCD_StopCrypto1();
+
+  // Step 1 — 0x40 with 7-bit frame, no CRC
+  {
+    byte cmd     = 0x40;
+    byte resp[4]; byte respLen = sizeof(resp);
+    byte vBits   = 7;   // 7 significant bits in the first (only) byte
+    auto s = rfid.PCD_TransceiveData(&cmd, 1, resp, &respLen, &vBits, 0, false);
+    rfid.PCD_WriteRegister(MFRC522::BitFramingReg, 0x00); // always restore framing
+    if (s != MFRC522::STATUS_OK) return false;
+    if ((resp[0] & 0x0F) != 0x0A) return false;  // expect 4-bit MIFARE ACK
+  }
+
+  // Step 2 — 0x43 with 8-bit frame, no CRC
+  {
+    byte cmd     = 0x43;
+    byte resp[4]; byte respLen = sizeof(resp);
+    auto s = rfid.PCD_TransceiveData(&cmd, 1, resp, &respLen, nullptr, 0, false);
+    if (s != MFRC522::STATUS_OK) return false;
+    if ((resp[0] & 0x0F) != 0x0A) return false;
+  }
+
+  return true;  // card is now in Gen1A backdoor mode
+}
+
+/* Write one 16-byte block on a Gen1A-unlocked card (no auth required).
+   Uses the standard MIFARE Write command — the card accepts it without auth
+   because it is in backdoor mode. */
+static bool gen1aWriteBlock(uint8_t blockAddr, const uint8_t* data16) {
+  MFRC522::StatusCode s = rfid.MIFARE_Write(blockAddr, (byte*)data16, 16);
+  return s == MFRC522::STATUS_OK;
+}
+
+/* Re-select the card after a failed magic-detection command that may have sent
+   it back to IDLE/HALT state.  Halts, waits briefly, then re-polls.
+   Returns true if the card is back in ACTIVE state with a valid UID. */
+static bool rfidReSelect() {
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
+  delay(10);
+  if (!rfid.PICC_IsNewCardPresent()) { delay(20); }
+  return rfid.PICC_ReadCardSerial();
+}
+
+/* Send a raw ISO14443A command with CRC-A appended; check CRC of the reply.
+   cmd / cmdLen : command bytes WITHOUT CRC.
+   resp / respLen: caller buffer; *respLen = capacity on entry, bytes received on exit.
+   Returns true on STATUS_OK (transceive + CRC check both passed). */
+static bool rfidRawCmd(const uint8_t* cmd, uint8_t cmdLen,
+                       uint8_t* resp, uint8_t* respLen) {
+  if ((uint16_t)cmdLen + 2u > 32u) return false;
+  uint8_t pkt[32];
+  memcpy(pkt, cmd, cmdLen);
+  byte crc[2];
+  if (rfid.PCD_CalculateCRC(pkt, cmdLen, crc) != MFRC522::STATUS_OK) return false;
+  pkt[cmdLen]     = crc[0];
+  pkt[cmdLen + 1] = crc[1];
+  rfid.PCD_StopCrypto1();
+  MFRC522::StatusCode s = rfid.PCD_TransceiveData(
+      pkt, cmdLen + 2, resp, respLen, nullptr, 0, true);
+  return s == MFRC522::STATUS_OK;
+}
+
+// ──────────────────────────────────────────────────────────────
+//  Gen3 ("APDU") magic card support
+//  Gen3 cards accept an ISO7816-style APDU (90 F0 CC CC 10 <block0>)
+//  after normal anticollision/select to write block 0, including the
+//  UID.  No MIFARE auth required.  All other blocks use standard auth.
+//  Detection is implicit — a non-Gen3 card will not return 90 00.
+// ──────────────────────────────────────────────────────────────
+
+/* Write block 0 on a Gen3 (APDU) card; also serves as detection.
+   Command: CLA=90 INS=F0 P1=CC P2=CC Lc=10 <16-byte block 0>
+   Returns true only if the card responds with status bytes 90 00. */
+static bool gen3WriteBlock0(const uint8_t* block0) {
+  uint8_t cmd[21];
+  cmd[0] = 0x90; cmd[1] = 0xF0; cmd[2] = 0xCC; cmd[3] = 0xCC; cmd[4] = 0x10;
+  memcpy(cmd + 5, block0, 16);
+  uint8_t resp[8]; uint8_t respLen = sizeof(resp);
+  if (!rfidRawCmd(cmd, 21, resp, &respLen)) return false;
+  // Expected: 90 00  (2 status bytes; CRC stripped by checkCRC=true)
+  return respLen >= 2 && resp[0] == 0x90 && resp[1] == 0x00;
+}
+
+// ──────────────────────────────────────────────────────────────
+//  Gen4 (GTU / GDM / USCUID "CF-command") magic card support
+//  Protocol:  CF <password[4]> <cmd> [data]
+//  Default password: 00 00 00 00
+//    CC               – version probe  (response: 00 00 00 02 AA)
+//    CD <blk> <16b>   – backdoor write any block, incl. block 0 / UID
+// ──────────────────────────────────────────────────────────────
+
+static const uint8_t GEN4_PW[4] = { 0x00, 0x00, 0x00, 0x00 };
+
+/* Probe for a Gen4 card by sending version command CF <pw> CC.
+   Genuine Gen4 response: 00 00 00 02 AA.
+   Returns true if Gen4 detected. */
+static bool gen4Detect() {
+  uint8_t cmd[6];
+  cmd[0] = 0xCF;  memcpy(cmd + 1, GEN4_PW, 4);  cmd[5] = 0xCC;
+  uint8_t resp[10]; uint8_t respLen = sizeof(resp);
+  if (!rfidRawCmd(cmd, 6, resp, &respLen)) return false;
+  return respLen >= 5 &&
+         resp[0] == 0x00 && resp[1] == 0x00 && resp[2] == 0x00 &&
+         resp[3] == 0x02 && resp[4] == 0xAA;
+}
+
+/* Write one 16-byte block on a Gen4 card via CF <pw> CD <block> <data>.
+   Gen4 ACK is a raw 4-bit MIFARE ACK (0x0A); CRC check may fail on it,
+   so we first try with CRC-checked response then retry without CRC check. */
+static bool gen4WriteBlock(uint8_t blockAddr, const uint8_t* data16) {
+  uint8_t cmd[23];
+  cmd[0] = 0xCF;  memcpy(cmd + 1, GEN4_PW, 4);
+  cmd[5] = 0xCD;  cmd[6] = blockAddr;
+  memcpy(cmd + 7, data16, 16);
+
+  uint8_t resp[8]; uint8_t respLen = sizeof(resp);
+  if (rfidRawCmd(cmd, 23, resp, &respLen)) return true;  // CRC-checked path OK
+
+  // Retry without response CRC check — card may send raw 4-bit ACK (0x0A)
+  uint8_t pkt[25];
+  memcpy(pkt, cmd, 23);
+  byte crc[2];
+  if (rfid.PCD_CalculateCRC(pkt, 23, crc) != MFRC522::STATUS_OK) return false;
+  pkt[23] = crc[0]; pkt[24] = crc[1];
+  uint8_t respLen2 = sizeof(resp); uint8_t vBits = 0;
+  MFRC522::StatusCode s = rfid.PCD_TransceiveData(
+      pkt, 25, resp, &respLen2, &vBits, 0, false);
+  return s == MFRC522::STATUS_OK && (resp[0] & 0x0F) == 0x0A;
+}
+
 /* Write a 1024-byte dump to a card.
-   Tries the default 0xFF key first (blank factory card), then
-   the key embedded in the dump (for already-keyed sectors).
-   Pass isMagicCard=true to also write block 0 (UID). */
-bool rfidWriteDump(uint8_t* uid, const uint8_t* buf, bool isMagicCard) {
+   Card-type detection order:
+     1. Gen1A  – responds to 0x40/0x43 backdoor; all 64 blocks written verbatim
+                 (block 0 / UID overwritten; trailer keys verbatim from dump).
+     2. Gen4   – GTU / GDM / USCUID; responds to CF 00000000 CC version probe;
+                 all 64 blocks written verbatim via CF <pw> CD backdoor commands.
+     3. Gen3   – APDU-based; block 0 written via 90 F0 CC CC 10 APDU;
+                 blocks 1-63 via 3-key auth; trailers use dump-UID-derived keys.
+     4. Gen2   – standard MIFARE (CUID/FUID); block 0 writable after normal auth;
+                 detected implicitly during sector 0 write; trailers re-keyed.
+     5. Normal MIFARE – block 0 is hardware-locked; written with 3-key strategy,
+                 trailer keys rewritten using dest-UID-derived keys.
+
+   3-key normal-auth priority per sector:
+     1. 0xFF…FF  (factory-blank card)
+     2. Key derived from the DESTINATION card's own UID  (previously Bambu-keyed)
+     3. Key A embedded in the dump  (source-UID key, last resort)
+
+   Trailer blocks are written with keys derived from the DESTINATION card UID
+   so the Bambu printer can authenticate the tag correctly after writing.
+
+   Returns the number of sectors successfully written (0 = total failure). */
+int rfidWriteDump(const uint8_t* buf, bool /*isMagicCard — now auto-detected via Gen1A*/) {
+  // ── Card select ──────────────────────────────────────────────────────────
   if (!rfid.PICC_IsNewCardPresent()) { delay(18); }
-  if (!rfid.PICC_ReadCardSerial()) { delay(18); }
+  if (!rfid.PICC_ReadCardSerial())   { delay(18); }
 
   if (!rfid.PICC_IsNewCardPresent()) {
-    DBGF("[WRITE] PICC_IsNewCardPresent FAIL\n");
-    return false;
-  } else {
-    DBGF("[WRITE] PICC_IsNewCardPresent OK\n");
+    DBGLN("[WRITE] PICC_IsNewCardPresent FAIL");
+    return 0;
   }
+  DBGLN("[WRITE] PICC_IsNewCardPresent OK");
+
   if (!rfid.PICC_ReadCardSerial()) {
-    DBGF("[WRITE] PICC_ReadCardSerial FAIL\n");
-    return false;
-  } else {
-    DBGF("[WRITE] PICC_ReadCardSerial OK\n");
+    DBGLN("[WRITE] PICC_ReadCardSerial FAIL");
+    return 0;
   }
+  DBGLN("[WRITE] PICC_ReadCardSerial OK");
 
-  MFRC522::MIFARE_Key kDef;
-  memset(kDef.keyByte, 0xFF, 6);
+  // ── Read destination UID ─────────────────────────────────────────────────
+  uint8_t destUID[4];
+  memcpy(destUID, rfid.uid.uidByte, 4);
+  DBGF("[WRITE] Dest UID: %02X %02X %02X %02X\n",
+       destUID[0], destUID[1], destUID[2], destUID[3]);
 
-  bool anyWritten = false;
+  // ── Auto-detect card type ────────────────────────────────────────────────────────
+  //  Detection order: Gen1A → Gen4 → Gen3 → Gen2 (implicit) → standard MIFARE
+  bool isGen1A = gen1aUnlock();
+  if (isGen1A) DBGLN("[WRITE] Gen1A magic card detected — bypassing auth (backdoor write)");
 
-  for (int sec = 0; sec < NUM_SECTORS; sec++) {
-    int trailer = sec * BLOCKS_PER_SECTOR + 3;
+  bool isGen4    = false;  // GTU / GDM / USCUID CF-command cards
+  bool isGen3    = false;  // APDU block-0-writable cards
+  bool isGen2    = false;  // detected implicitly during sector 0 normal-auth write
+  int  sectorsOk = 0;
 
-    // Key A embedded in the dump's trailer block
-    MFRC522::MIFARE_Key kDump;
-    memcpy(kDump.keyByte, buf + trailer * BYTES_PER_BLOCK, 6);
-
-    bool authed = tryAuth(trailer, &kDef, true)
-                  || tryAuth(trailer, &kDump, true);
-
-    DBGF("[WRITE] sector %02d auth -> %s\n", sec, authed ? "OK" : "FAIL");
-    if (!authed) continue;
-
-    // Data blocks
-    for (int b = 0; b < 3; b++) {
-      int addr = sec * BLOCKS_PER_SECTOR + b;
-      if (addr == 0 && !isMagicCard) continue;  // skip UID block on non-magic
-      MFRC522::StatusCode ws = rfid.MIFARE_Write(
-        addr, (uint8_t*)(buf + addr * BYTES_PER_BLOCK), BYTES_PER_BLOCK);
-      DBGF("[WRITE]   blk %02d -> %s\n", addr,
-           ws == MFRC522::STATUS_OK ? "OK" : "FAIL");
-      if (ws == MFRC522::STATUS_OK) anyWritten = true;
+  // ── Gen1A path: write all 64 blocks verbatim ─────────────────────────────
+  //  Block 0 (UID) written; trailer keys kept verbatim from dump.
+  if (isGen1A) {
+    for (int sec = 0; sec < NUM_SECTORS; sec++) {
+      bool sectorOk = true;
+      for (int b = 0; b < BLOCKS_PER_SECTOR; b++) {
+        int addr = sec * BLOCKS_PER_SECTOR + b;
+        bool ok = gen1aWriteBlock(addr, buf + addr * BYTES_PER_BLOCK);
+        DBGF("[WRITE]   blk %02d -> %s\n", addr, ok ? "OK" : "FAIL");
+        if (!ok) sectorOk = false;
+      }
+      DBGF("[WRITE] sector %02d -> %s\n", sec, sectorOk ? "OK" : "FAIL");
+      if (sectorOk) sectorsOk++;
     }
-    // Sector trailer (keys + access bits)
-    {
-      MFRC522::StatusCode ws = rfid.MIFARE_Write(
-        trailer, (uint8_t*)(buf + trailer * BYTES_PER_BLOCK), BYTES_PER_BLOCK);
-      DBGF("[WRITE]   trailer blk %02d -> %s\n", trailer,
-           ws == MFRC522::STATUS_OK ? "OK" : "FAIL");
+
+  // ── Gen4 / Gen3 / Gen2 / Normal path ──────────────────────────────────────
+  } else {
+
+    // ── Gen4 probe (CF 00000000 CC version command) ─────────────────────
+    //  Non-Gen4 MIFARE cards may be confused by the CF command → re-select.
+    isGen4 = gen4Detect();
+    if (isGen4) {
+      DBGLN("[WRITE] Gen4 (GTU/GDM/USCUID) magic card detected — CF backdoor write");
+    } else {
+      rfidReSelect();  // restore ACTIVE state after failed Gen4 probe
+    }
+
+    if (isGen4) {
+      // ── Gen4 path: write all 64 blocks via CF CD commands ────────────────
+      for (int sec = 0; sec < NUM_SECTORS; sec++) {
+        bool sectorOk = true;
+        for (int b = 0; b < BLOCKS_PER_SECTOR; b++) {
+          int addr = sec * BLOCKS_PER_SECTOR + b;
+          bool ok = gen4WriteBlock(addr, buf + addr * BYTES_PER_BLOCK);
+          DBGF("[WRITE]   blk %02d -> %s\n", addr, ok ? "OK" : "FAIL");
+          if (!ok) sectorOk = false;
+        }
+        DBGF("[WRITE] sector %02d -> %s\n", sec, sectorOk ? "OK" : "FAIL");
+        if (sectorOk) sectorsOk++;
+      }
+
+    } else {
+      // ── Gen3 probe: APDU 90 F0 CC CC 10 <block0> ────────────────────────
+      //  Detection and block-0 write are the same operation; non-Gen3 cards
+      //  will not respond 90 00, and may need re-select afterwards.
+      isGen3 = gen3WriteBlock0(buf);  // buf[0..15] = block 0 data
+      if (isGen3) {
+        DBGLN("[WRITE] Gen3 (APDU) magic card detected — block 0 (UID) written via APDU");
+      }
+      // Re-select always: Gen3 success changes UID; failure may confuse card
+      if (!rfidReSelect()) {
+        DBGLN("[WRITE] Re-select failed after Gen3 probe — card removed?");
+        return 0;
+      }
+
+      // Derive trailer keys from the EFFECTIVE card UID:
+      //   Gen3: dump UID is now the card's UID   → use buf[0..3]
+      //   Gen2: UID changes on first block-0 write → re-derived inline below
+      //   Standard: card UID unchanged             → use original destUID
+      uint8_t effectiveUID[4];
+      memcpy(effectiveUID, isGen3 ? buf : destUID, 4);
+
+      uint8_t keysDestA[16][6], keysDestB[16][6];
+      bambuDeriveKeys(effectiveUID, keysDestA, keysDestB);
+      DBGLN("[WRITE] Destination key derivation complete.");
+
+      MFRC522::MIFARE_Key kDef;
+      memset(kDef.keyByte, 0xFF, 6);
+
+      for (int sec = 0; sec < NUM_SECTORS; sec++) {
+        int trailer = sec * BLOCKS_PER_SECTOR + 3;
+
+        MFRC522::MIFARE_Key kDump, kDest;
+        memcpy(kDump.keyByte, buf + trailer * BYTES_PER_BLOCK, 6);  // source-UID key
+        memcpy(kDest.keyByte, keysDestA[sec], 6);                   // dest-UID key
+
+        bool authed = tryAuth(trailer, &kDef,  true)   // 1. blank/factory card
+                   || tryAuth(trailer, &kDest, true)   // 2. previously Bambu-keyed w/ dest UID
+                   || tryAuth(trailer, &kDump, true);  // 3. source-UID key (last resort)
+
+        DBGF("[WRITE] sector %02d auth -> %s\n", sec, authed ? "OK" : "FAIL");
+        if (!authed) continue;
+
+        bool sectorOk = true;
+
+        // Data blocks 0..2
+        for (int b = 0; b < 3; b++) {
+          int addr = sec * BLOCKS_PER_SECTOR + b;
+          if (addr == 0) {
+            if (isGen3) {
+              // Block 0 already written via Gen3 APDU — skip
+              DBGLN("[WRITE]   blk 00 -> already written via Gen3 APDU, skipping");
+            } else {
+              // Attempt block 0 write: succeeds on Gen2, silent fail on standard MIFARE
+              MFRC522::StatusCode ws = rfid.MIFARE_Write(
+                0, (uint8_t*)(buf), BYTES_PER_BLOCK);
+              if (ws == MFRC522::STATUS_OK) {
+                if (!isGen2) {
+                  DBGLN("[WRITE] Gen2 magic card detected — block 0 (UID) written");
+                  isGen2 = true;
+                  // Card now has dump's UID — re-derive all trailer keys from dump UID
+                  bambuDeriveKeys(buf, keysDestA, keysDestB);
+                }
+                DBGLN("[WRITE]   blk 00 -> OK");
+              } else {
+                DBGLN("[WRITE]   blk 00 -> read-only (standard MIFARE, skipping)");
+              }
+            }
+            continue;
+          }
+          MFRC522::StatusCode ws = rfid.MIFARE_Write(
+            addr, (uint8_t*)(buf + addr * BYTES_PER_BLOCK), BYTES_PER_BLOCK);
+          DBGF("[WRITE]   blk %02d -> %s\n", addr,
+               ws == MFRC522::STATUS_OK ? "OK" : "FAIL");
+          if (ws != MFRC522::STATUS_OK) sectorOk = false;
+        }
+
+        // Trailer: effective-UID-derived keys + access bits verbatim from dump
+        // Layout: [KeyA 0..5][AccessBits 6..9][KeyB 10..15]
+        {
+          uint8_t trailerBlock[16];
+          memcpy(trailerBlock,      keysDestA[sec], 6);
+          memcpy(trailerBlock + 6,  buf + trailer * BYTES_PER_BLOCK + 6, 4);
+          memcpy(trailerBlock + 10, keysDestB[sec], 6);
+          MFRC522::StatusCode ws = rfid.MIFARE_Write(trailer, trailerBlock, BYTES_PER_BLOCK);
+          DBGF("[WRITE]   trailer blk %02d -> %s\n", trailer,
+               ws == MFRC522::STATUS_OK ? "OK" : "FAIL");
+          if (ws != MFRC522::STATUS_OK) sectorOk = false;
+        }
+
+        if (sectorOk) sectorsOk++;
+      }
     }
   }
 
   rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();
-  return anyWritten;
+  const char* cardType = isGen1A ? "Gen1A" : isGen4 ? "Gen4"
+                       : isGen3  ? "Gen3"  : isGen2  ? "Gen2" : "standard MIFARE";
+  DBGF("[WRITE] %d/%d sectors written OK  [card type: %s]\n",
+       sectorsOk, NUM_SECTORS, cardType);
+  return sectorsOk;
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -1090,7 +1368,7 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
   <div class="card">
     <h3>GitHub Library</h3>
     <p style="font-size:.85em;color:#8b949e;margin:0 0 12px">
-      Tags from <a href="" target="_blank"  style="color:#58a6ff">Bambu-Lab-RFID-Library</a>.<br>
+      +900 community tags from <a href="" target="_blank"  style="color:#58a6ff">Bambu-Lab-RFID-Library</a>.<br>
     </p>
   </div>
   <div class="card">
@@ -4151,18 +4429,25 @@ void processCloneTarget() {
       ledSet(255, 255, 0);  // yellow = writing in progress
       showStatus("Writing\x85");
 
-      uint8_t uidtemp[6];
-      memset(uidtemp, 0xFF, 6);
-
-      bool ok = rfidWriteDump(uidtemp, dumpBuf, true);
-      DBGF("[CLONE] Write result: %s\n", ok ? "OK" : "FAIL");
+      int sectOk = rfidWriteDump(dumpBuf, true);
+      DBGF("[CLONE] Write result: %d/%d sectors OK\n", sectOk, NUM_SECTORS);
+      bool ok = (sectOk == NUM_SECTORS);
+      bool partial = (sectOk > 0 && sectOk < NUM_SECTORS);
       if (ok) {
         ledFlash(0, 255, 0, 3);  // 3× green = success
+      } else if (partial) {
+        ledFlash(255, 165, 0, 3); // 3× amber = partial
       } else {
         ledFlash(255, 0, 0, 3);  // 3× red = fail
       }
-      showStatus(ok ? "Clone complete!\n\nClick to return."
-                    : "Write failed!\nTry a magic/FUID\ncard.\n\nClick to return.");
+      char cloneMsg[64];
+      if (ok)
+        snprintf(cloneMsg, sizeof(cloneMsg), "Clone complete!\n\nClick to return.");
+      else if (partial)
+        snprintf(cloneMsg, sizeof(cloneMsg), "Partial! %d/16 sec\nCard already keyed?\n\nClick to return.", sectOk);
+      else
+        snprintf(cloneMsg, sizeof(cloneMsg), "Write failed!\nTry a magic/FUID\ncard.\n\nClick to return.");
+      showStatus(cloneMsg);
       appState = S_WIFI_INFO;
       return;
     }
@@ -4200,11 +4485,18 @@ void processDumpWrite() {
            rfid.uid.uidByte[2], rfid.uid.uidByte[3]);
       ledSet(255, 255, 0);  // yellow = writing
       showStatus("Writing tag\x85");
-      bool ok = rfidWriteDump(preview.uid, dumpBuf, true);
-      DBGF("[DUMP]  Write result: %s\n", ok ? "OK" : "FAIL");
+      int sectOk = rfidWriteDump(dumpBuf, true);
+      DBGF("[DUMP]  Write result: %d/%d sectors OK\n", sectOk, NUM_SECTORS);
+      bool ok = (sectOk == NUM_SECTORS);
+      bool partial = (sectOk > 0 && sectOk < NUM_SECTORS);
       if (ok) {
         ledFlash(0, 255, 0, 3);  // 3× green = success
         showStatus("Write complete!\n\nClick to return.");
+      } else if (partial) {
+        ledFlash(255, 165, 0, 3); // 3× amber = partial write
+        char msg[64];
+        snprintf(msg, sizeof(msg), "Partial! %d/16 sec\nCard keyed wrong?\n\nClick to return.", sectOk);
+        showStatus(msg);
       } else {
         ledFlash(255, 0, 0, 3);  // 3× red = fail
         showStatus("Write failed!\nTry a magic/FUID\ncard.\n\nClick to return.");
