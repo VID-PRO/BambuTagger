@@ -10,7 +10,9 @@ name: Build & Release
 on:
   push:
     branches: [ "main", "master" ]
-    tags:     [ "v*" ]
+    tags:
+      - "v*"       # v1.6.0, v2.0.0, …
+      - "[0-9]*"   # 1.6.0, 2.0.0, … (bare version tags without 'v')
   pull_request:
     branches: [ "main", "master" ]
   workflow_dispatch:        # allow manual runs from the Actions tab
@@ -68,11 +70,10 @@ jobs:
       - name: Compile sketch
         run: |
           arduino-cli compile \
-            --fqbn esp32:esp32:esp32 \
-            --build-property build.partitions=default_ffat \
+            --fqbn "esp32:esp32:esp32:PartitionScheme=default_ffat" \
             --output-dir "${{ github.workspace }}/build" \
             --warnings none \
-            "${{ github.workspace }}/BambuTagger.ino"
+            "${{ github.workspace }}/BambuTagger/BambuTagger.ino"
 
       # ── 7. Build a merged flashable binary ───────────────────
       # Combines bootloader + partition table + app into a single
@@ -81,18 +82,18 @@ jobs:
         run: |
           pip install esptool --quiet
           # Locate the ESP32 build artefacts
-          BOOT="${{ github.workspace }}/build/BambuTagger.ino.bootloader.bin"
+          BOOT=$(find ~/.arduino15 -name "bootloader_dio_80m.bin" | head -1)
           PART="${{ github.workspace }}/build/BambuTagger.ino.partitions.bin"
           APP="${{ github.workspace }}/build/BambuTagger.ino.bin"
           MERGED="${{ github.workspace }}/build/BambuTagger_merged.bin"
 
-          esptool \
+          esptool.py \
             --chip esp32 \
-            merge-bin \
+            merge_bin \
             --output "$MERGED" \
-            --flash-mode dio \
-            --flash-freq 80m \
-            --flash-size 4MB \
+            --flash_mode dio \
+            --flash_freq 80m \
+            --flash_size 4MB \
             0x1000  "$BOOT" \
             0x8000  "$PART" \
             0xe000  ~/.arduino15/packages/esp32/hardware/esp32/2.0.17/tools/partitions/boot_app0.bin \
