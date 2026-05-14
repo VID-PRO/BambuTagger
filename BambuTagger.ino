@@ -3473,16 +3473,49 @@ void handleGhBrowseEncoder() {
     ledFlash(0, 255, 0, 3);
     ghDlStatus = "Saved: " + localName;
     DBGF("[GH]  Download OK: %s\n", localName.c_str());
-    showStatus2("Downloaded!", ("Use WriteDump\n" + shortDumpName(localName)).c_str());
-    // Pre-position FAT browser at the downloaded file (no redraw yet)
+    // Pre-position FAT browser at the downloaded file
     fatNavigateTo(localName);
+
+    // ── Offer immediate write — same flow as BambuMan browser ──
+    File df = FFat.open(localName, FILE_READ);
+    if (df && (int)df.size() == DUMP_SIZE) {
+      df.read(dumpBuf, DUMP_SIZE);
+      df.close();
+      strncpy(selectedDumpPath, localName.c_str(), sizeof(selectedDumpPath) - 1);
+      selectedDumpPath[sizeof(selectedDumpPath) - 1] = '\0';
+
+      TagInfo preview;
+      flatToTag(dumpBuf, &preview);
+      char msg[128];
+      snprintf(msg, sizeof(msg),
+               "GitHub OK!\n%.16s\n%.16s\n[click]=WRITE\n[enc]=cancel",
+               preview.filamentType, preview.detailedType);
+      showStatus(msg);
+
+      unsigned long deadline = millis() + 15000;
+      while (millis() < deadline) {
+        httpServer.handleClient();
+        encUpdate();
+        if (encGetClick()) {
+          appState = S_DUMP_WRITE;
+          return;  // skip browser restore; write flow takes over
+        }
+        if (encGetDelta() != 0) break;  // cancel
+        delay(20);
+      }
+    } else {
+      // Unexpected size — fall back to info screen
+      if (df) df.close();
+      showStatus2("Downloaded!", ("Use WriteDump\n" + shortDumpName(localName)).c_str());
+      delay(3000);
+    }
   } else {
     ledFlash(255, 0, 0, 3);
     ghDlStatus = "Failed!";
     DBGLN("[GH]  Download FAILED");
     showStatus2("Download FAILED", "See Serial");
+    delay(3000);
   }
-  delay(3000);
 
   // Return to browser (re-fetch current level)
   appState = S_GH_BROWSE;
@@ -4171,7 +4204,7 @@ void handleBmCatEncoder() {
       flatToTag(dumpBuf, &preview);
       char msg[128];
       snprintf(msg, sizeof(msg),
-               "BambuMan OK!\n%.16s\n%.16s\n\n[click]=WRITE\n[enc]=cancel",
+               "BambuMan OK!\n%.16s\n%.16s\n[click]=WRITE\n[enc]=cancel",
                preview.filamentType, preview.detailedType);
       showStatus(msg);
       ledFlash(0, 255, 0, 2);

@@ -175,7 +175,7 @@ Row 0 of the list is always a navigation shortcut:
 - **Title bar** shows the current directory name (e.g. `PLA_BASIC`, `BLACK`); root shows `Select Dump`.
 - Entries are sorted: subdirectories first (prefix `>`), then `.bin` files.
 - Up to 4 rows are visible at a time; the list scrolls with the cursor.
-- After a GitHub download completes, the browser pre-navigates to the folder the file was saved to.
+- After a GitHub download completes, the OLED shows a write-confirm screen so you can write the tag immediately (see **§ 4 · GitHub Lib**). The FAT browser is also pre-navigated to the downloaded file's folder so you can write it later from **3 · Write Dump**.
 
 ### 4 · GitHub Lib
 Browse the [Bambu Lab RFID Library](https://github.com/queengooborg/Bambu-Lab-RFID-Library) repository **directly on the OLED** — no PC required.  Requires WiFi (STA) connectivity.
@@ -207,7 +207,7 @@ Every level has a direct `<< MENU` shortcut.  At the root, row 0 is `<< MENU`.  
 | Click `< BACK` (sub-level row 0) | Go up one directory level |
 | Click `<< MENU` (sub-level row 1) | Return to main menu directly |
 | Click on folder | Navigate into it |
-| Click on file | Download & save to FAT |
+| Click on file | Download → save to FAT → write-confirm screen |
 
 Files are saved to FAT mirroring the GitHub repository directory structure:
 
@@ -217,9 +217,28 @@ Files are saved to FAT mirroring the GitHub repository directory structure:
 | `ABS/ABS Basic/Red/F1A2B3C4/dump.json` | `/ABS/ABS_BASIC/RED/F1A2B3C4.bin` |
 | `TPU/TPU 95A HF/White/00112233/dump.bin` | `/TPU/TPU_95A_HF/WHITE/00112233.bin` |
 
-Parent directories are created automatically if they don't exist.  
-The OLED **Write Dump** browser shows the short path (`COLOR/UID`, e.g. `BLACK/3AD82DAD`) when highlighting a file.  
-Downloaded files are immediately available in **3 · Write Dump**.
+Parent directories are created automatically if they don't exist.
+
+#### Write-confirm after download
+
+After a successful download the OLED immediately shows a write-confirm screen (identical to the BambuMan flow):
+
+```
+GitHub OK!
+PLA Basic
+PLA Matte
+
+[click]=WRITE
+[enc]=cancel
+```
+
+| Action | Result |
+|--------|--------|
+| **Click** (within 15 s) | Load dump → enter RFID write flow immediately |
+| **Rotate encoder** | Cancel — return to GitHub browser at same directory |
+| **15 s timeout** | Same as rotate — return to browser |
+
+The dump is also pre-loaded into the write buffer, so if you cancel and later navigate to **3 · Write Dump** the cursor is already positioned on the file.
 
 > **Tip:** Set a GitHub personal access token in the **WiFi tab** of the web UI to raise the API rate limit from 60 to 5 000 requests/hour.
 
