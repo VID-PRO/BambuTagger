@@ -70,7 +70,8 @@ jobs:
       - name: Compile sketch
         run: |
           arduino-cli compile \
-            --fqbn "esp32:esp32:esp32:PartitionScheme=default_ffat" \
+            --fqbn "esp32:esp32:esp32" \
+            --build-properties PartitionScheme=default_ffat \
             --output-dir "${{ github.workspace }}/build" \
             --warnings none \
             "${{ github.workspace }}/BambuTagger.ino"
