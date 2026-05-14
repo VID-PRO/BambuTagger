@@ -316,7 +316,11 @@ Click **🔄 Sync Catalog** to fetch the bambuman.ee file index.  The ESP32 send
 - Per-row **✏️ Write** — downloads (if not already cached) and queues a tag-write (20 s window).
 
 #### Fetch by UID
-Enter a known UID directly and click **⬇ Fetch** to retrieve `data.bin` from `https://bambuman.ee/api/tags/{UID}/data.bin`.  The server tries to resolve the material/type/color from the catalog first; if found the file is placed in the structured tree (`/{MAT}/{TYPE}/{COLOR}/{UID}.bin`), otherwise it falls back to `/BM/{UID}.bin`.
+Enter a known UID directly and click **⬇ Fetch** to retrieve `data.bin` from `https://bambuman.ee/api/tags/{UID}/data.bin`.  Both the web API and the OLED follow the same 3-tier path resolution:
+
+1. **Caller-supplied m/t/c** — if material, type, and color are passed explicitly (Search row results), used directly.
+2. **Catalog lookup** — if any field is missing, `/BM/catalog.json` is stream-searched for the UID to fill in the gaps.  If the catalog has an entry the file lands in `/{MAT}/{TYPE}/{COLOR}/{UID}.bin`.
+3. **Flat fallback** — `/BM/{UID}.bin` only if the catalog has no entry for this UID (e.g. catalog never synced).
 
 ### Tab 4 — Status
 - Shows current WiFi mode, SSID, and IP address.
@@ -350,7 +354,7 @@ All endpoints return JSON unless noted.
 | `POST` | `/api/token` | `{"token":"…"}` — save GitHub API token to NVS |
 | `POST` | `/api/bm/sync` | Fetch bambuman.ee ZIP central directory → save `/BM/catalog.json` |
 | `GET` | `/api/bm/catalog` | Stream `/BM/catalog.json` from FAT |
-| `GET` | `/api/bm/fetch?uid=XXXXXXXX[&mat=…&type=…&color=…]` | Fetch `data.bin` → structured path (catalog lookup if m/t/c omitted; `/BM/` fallback) |
+| `GET` | `/api/bm/fetch?uid=XXXXXXXX[&mat=…&type=…&color=…]` | Fetch `data.bin` → caller m/t/c → catalog lookup → `/BM/` fallback |
 | `GET` | `/api/bm/list` | Return `[{path, size}]` of all BambuMan-downloaded files (from `/BM/index.txt`, stale entries pruned) |
 
 ---
@@ -421,7 +425,7 @@ Downloaded dump files are stored in a directory tree that mirrors the GitHub rep
 | GitHub: `PLA/PLA Basic/Black/3AD82DAD/dump.bin` | `/PLA/PLA_BASIC/BLACK/3AD82DAD.bin` |
 | GitHub: `ABS/ABS Basic/Red/F1A2B3C4/dump.json` | `/ABS/ABS_BASIC/RED/F1A2B3C4.bin` |
 | BambuMan: material PLA, type PLA_BASIC, color Black, UID `9510C2A3` | `/PLA/PLA_BASIC/BLACK/9510C2A3.bin` |
-| BambuMan: UID only (catalog miss / Fetch by UID) | `/BM/9510C2A3.bin` |
+| BambuMan: UID only (catalog has no entry for this UID) | `/BM/9510C2A3.bin` |
 | BambuMan catalog index | `/BM/catalog.json` |
 | BambuMan download index | `/BM/index.txt` |
 | Manual web upload | `/<filename>.bin` (flat at root) |
@@ -490,7 +494,7 @@ To disable all debug output and save flash/RAM:
   BM/
     catalog.json                     — bambuman.ee catalog (sync once from web UI or OLED)
     index.txt                        — list of all BambuMan-downloaded file paths
-    9510C2A3.bin                     — fallback: Fetch by UID when catalog lookup fails
+    9510C2A3.bin                     — fallback only: no catalog entry for this UID
   PLA/
     PLA_BASIC/
       BLACK/

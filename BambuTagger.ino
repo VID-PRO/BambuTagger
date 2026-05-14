@@ -4015,14 +4015,25 @@ String bmCatFetchUid(const String& uid) {
     return "";
   }
 
-  // ── Resolve save path using catalog context ───────────────────────────────
+  // ── Resolve save path: catalog context → catalog lookup → fallback ────────
   String mat(bmCatMat), typ(bmCatType), col(bmCatColor);
+  // If m/t/c globals not set (e.g. scan-tag flow), try catalog.json lookup
+  if (mat.isEmpty() || typ.isEmpty() || col.isEmpty()) {
+    String lm, lt, lc;
+    if (bmLookupCatalog(uid, lm, lt, lc)) {
+      if (mat.isEmpty()) mat = lm;
+      if (typ.isEmpty()) typ = lt;
+      if (col.isEmpty()) col = lc;
+      DBGF("[BM]  Catalog lookup hit: %s/%s/%s\n", mat.c_str(), typ.c_str(), col.c_str());
+    }
+  }
   String savePath;
-  if (mat.length() > 0 && typ.length() > 0 && col.length() > 0) {
+  if (!mat.isEmpty() && !typ.isEmpty() && !col.isEmpty()) {
     savePath = buildBmFilePath(mat, typ, col, uid);
   } else {
     if (!FFat.exists("/BM")) FFat.mkdir("/BM");
     savePath = "/BM/" + uid + ".bin";
+    DBGLN("[BM]  No m/t/c — using fallback path");
   }
   ensureParentDirs(savePath);
   File f = FFat.open(savePath, "w");
