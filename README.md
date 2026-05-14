@@ -123,7 +123,7 @@ If Gen1A is not detected, the routine probes for **Gen4 (GTU / GDM / USCUID)** c
 
 If Gen4 is not detected, the routine tries **Gen3 (APDU-based)** cards by sending `90 F0 CC CC 10 <block0>`. A Gen3 card responds `90 00` — this both detects the card type and writes block 0 (UID) atomically. Blocks 1–63 are then written via 3-key normal auth, with trailer keys derived from the dump's UID (which the card now presents).
 
-If Gen3 also fails, the routine enters the **normal-auth path** — which transparently handles **Gen2 / CUID / FUID** cards. These look like standard MIFARE but allow writing block 0 after normal auth. The routine detects this implicitly by attempting `MIFARE_Write` to block 0; on Gen2 it succeeds (UID overwritten), on genuine MIFARE it fails silently.
+If Gen3 also fails, the routine enters the **normal-auth path** — which transparently handles **Gen2 / CUID / FUID** cards. These look like standard MIFARE but allow writing block 0 after normal auth. The routine detects this implicitly by attempting `MIFARE_Write` to block 0; on Gen2 it succeeds (UID overwritten), on genuine MIFARE it fails silently. Once block 0 is confirmed written and sector 0's trailer is complete, the reader **cycles the RF antenna** (`PCD_AntennaOff` → 30 ms → `PCD_AntennaOn` → re-poll) so the card power-cycles from HALT state back to IDLE and responds to the next REQA. A plain `PICC_HaltA()` is insufficient here: ISO 14443A halted cards ignore REQA (0x26) and only wake on WUPA (0x52), but the MFRC522 library's `PICC_IsNewCardPresent()` sends REQA — so the card would silently ignore every re-poll attempt. The antenna cycle forces a hard capacitor drain, returning the card to IDLE state where it answers REQA normally. The MFRC522 then re-discovers the card's UID (new dump UID) and sectors 1–15 auth proceeds correctly.
 
 If none of the above magic paths are detected (genuine MIFARE Classic), the routine falls back to a **3-key normal-auth strategy**:
 
@@ -132,7 +132,7 @@ If none of the above magic paths are detected (genuine MIFARE Classic), the rout
 | **Gen1A backdoor** | Card responds to `0x40` / `0x43` | All 64 blocks written verbatim; block 0 (UID) overwritten |
 | **Gen4 (GTU/GDM)** | Card responds to `CF 00000000 CC` with version `00 00 00 02 AA` | All 64 blocks written verbatim via `CF <pw> CD` commands; block 0 (UID) overwritten |
 | **Gen3 (APDU)** | Card responds `90 00` to APDU `90 F0 CC CC 10 <block0>` | Block 0 written via APDU; blocks 1–63 via 3-key auth; trailers use dump-UID-derived keys |
-| **Gen2 implicit** | Standard MIFARE protocol; block 0 write succeeds after normal auth | Detected during sector 0 write; block 0 overwritten; trailer keys re-derived from dump UID |
+| **Gen2 implicit** | Standard MIFARE protocol; block 0 write succeeds after normal auth | Detected during sector 0 write; block 0 overwritten; RF antenna cycled off/on so card exits HALT → IDLE state and responds to REQA; trailer keys re-derived from dump UID; sectors 1–15 auth then succeeds |
 | **Normal auth** | Genuine MIFARE Classic (block 0 read-only) | 3-key trial per sector; trailers re-written with dest-UID-derived keys |
 
 Normal-auth key trial order:

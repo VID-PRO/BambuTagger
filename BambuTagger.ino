@@ -596,11 +596,20 @@ static bool gen1aWriteBlock(uint8_t blockAddr, const uint8_t* data16) {
    it back to IDLE/HALT state.  Halts, waits briefly, then re-polls.
    Returns true if the card is back in ACTIVE state with a valid UID. */
 static bool rfidReSelect() {
-  rfid.PICC_HaltA();
+  // After PICC_HaltA() the card enters ISO14443A HALT state and only wakes
+  // via WUPA (0x52), but PICC_IsNewCardPresent() sends REQA (0x26) which the
+  // halted card ignores.  Cycling the RF field is the most reliable fix: it
+  // power-cycles the card to IDLE so it responds to the next REQA normally.
   rfid.PCD_StopCrypto1();
-  delay(10);
-  if (!rfid.PICC_IsNewCardPresent()) { delay(20); }
-  return rfid.PICC_ReadCardSerial();
+  rfid.PCD_AntennaOff();
+  delay(30);                        // card capacitor drains → IDLE state
+  rfid.PCD_AntennaOn();
+  delay(20);                        // RF field stabilises, card powers up
+  for (uint8_t i = 0; i < 8; i++) {
+    if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) return true;
+    delay(25);                      // 8 × 25 ms = up to 200 ms total window
+  }
+  return false;
 }
 
 /* Send a raw ISO14443A command with CRC-A appended; check CRC of the reply.
@@ -876,6 +885,24 @@ int rfidWriteDump(const uint8_t* buf, bool /*isMagicCard — now auto-detected v
         }
 
         if (sectorOk) sectorsOk++;
+
+        // ── Gen2 post-sector-0 re-select ─────────────────────────────────
+        // Writing block 0 changes the card's UID. The MFRC522 crypto engine
+        // binds its challenge-response to the UID it discovered during
+        // anti-collision. If we continue without re-selecting, the reader
+        // computes auth challenges against the OLD UID while the card now
+        // answers as the NEW UID → every sector 1-15 auth fails.
+        // Fix: halt, wait, re-poll so the reader re-discovers the new UID.
+        if (sec == 0 && isGen2) {
+          // Card UID just changed — rfidReSelect() halts, waits, re-polls
+          // with up to 8 retries so the reader discovers the new UID before
+          // sector 1-15 auth (which is UID-seeded crypto).
+          if (!rfidReSelect()) {
+            DBGLN("[WRITE] Gen2 re-select after block 0 failed — aborting");
+            break;
+          }
+          DBGLN("[WRITE] Gen2 re-select OK — reader now sees new UID, continuing sectors 1-15");
+        }
       }
     }
   }
@@ -1368,7 +1395,7 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
   <div class="card">
     <h3>GitHub Library</h3>
     <p style="font-size:.85em;color:#8b949e;margin:0 0 12px">
-      +900 community tags from <a href="" target="_blank"  style="color:#58a6ff">Bambu-Lab-RFID-Library</a>.<br>
+      Tags from <a href="" target="_blank"  style="color:#58a6ff">Bambu-Lab-RFID-Library</a>.<br>
     </p>
   </div>
   <div class="card">
