@@ -119,7 +119,7 @@
 #define AP_SSID "BambuTagger"
 #define AP_PASS "bambu1234"
 
-#define FIRMWARE_VERSION "1.7.2"          // bumped by release workflow tag
+#define FIRMWARE_VERSION "1.7.3"          // bumped by release workflow tag
 #define OTA_REPO         "VID-PRO/BambuTagger"
 
 #define GITHUB_API_HOST "api.github.com"
@@ -1599,7 +1599,15 @@ function otaCheck() {
     document.getElementById('ota-cur').textContent = d.current || '?';
     if(!d.ok){ st.className='status error'; st.textContent='Error: '+(d.error||'unknown'); return; }
     document.getElementById('ota-latest').textContent = d.latest || '?';
-    if(d.update_available){
+    // semver compare: only show flash button when latest strictly > current
+    function semverGt(a, b) {
+      const pa = String(a).replace(/^v/i,'').split('.').map(Number);
+      const pb = String(b).replace(/^v/i,'').split('.').map(Number);
+      for(let i=0;i<3;i++){ const x=pa[i]||0, y=pb[i]||0; if(y>x) return true; if(y<x) return false; }
+      return false;
+    }
+    const newer = d.update_available && semverGt(d.current||'0', d.latest||'0');
+    if(newer){
       st.className = 'status success';
       st.innerHTML = '&#x2B06;&#xFE0F; Update available: <strong>'+d.latest+'</strong>';
       btn.setAttribute('data-url', d.download_url||'');
@@ -3105,7 +3113,7 @@ void enterMainMenu() {
 // OLED-driven blocking OTA flow
 void processOtaUpdate() {
   if (WiFi.status() != WL_CONNECTED) {
-    showStatus("OTA Update\n\nNo WiFi!\n\nClick to return.");
+    showStatus("OTA Update\nNo WiFi!\n\nClick to return.");
     ledFlash(255, 80, 0, 2);
     appState = S_WIFI_INFO;
     return;
@@ -3128,7 +3136,7 @@ void processOtaUpdate() {
   // 2/3 — Version compare (rel.tag is already stripped of leading 'v')
   String current = FIRMWARE_VERSION;  // bare e.g. "1.6.0"
   if (rel.tag == current) {
-    showStatus(("OTA Update\n\nUp to date!\nv" + current + "\n\nClick to return.").c_str());
+    showStatus(("OTA Update\n\nUp to date! v" + current + "\n\nClick to return.").c_str());
     ledFlash(0, 255, 0, 2);
     appState = S_WIFI_INFO;
     return;
@@ -3170,6 +3178,26 @@ void processOtaUpdate() {
   ESP.restart();
 }
 
+// Compare two bare semver strings (no leading 'v').  Returns true if b > a.
+static bool semverGt(const String& a, const String& b) {
+  // Parse up to 3 dot-separated numeric components
+  auto parse = [](const String& s, int out[3]) {
+    int i = 0, comp = 0;
+    out[0] = out[1] = out[2] = 0;
+    for (char c : s) {
+      if (c == '.') { if (++comp >= 3) break; }
+      else if (c >= '0' && c <= '9') out[comp] = out[comp] * 10 + (c - '0');
+    }
+  };
+  int va[3], vb[3];
+  parse(a, va); parse(b, vb);
+  for (int i = 0; i < 3; i++) {
+    if (vb[i] > va[i]) return true;
+    if (vb[i] < va[i]) return false;
+  }
+  return false; // equal
+}
+
 // GET /api/ota/check  — returns current + latest version info
 void apiOtaCheck() {
   DBGLN("[HTTP]  GET /api/ota/check");
@@ -3194,7 +3222,7 @@ void apiOtaCheck() {
       doc["latest"]           = rel.tag;
       doc["download_url"]     = rel.dlUrl;
       doc["size"]             = rel.size;
-      doc["update_available"] = (rel.tag != fwNorm);
+      doc["update_available"] = semverGt(fwNorm, rel.tag);
     }
   }
   String out; serializeJson(doc, out);
