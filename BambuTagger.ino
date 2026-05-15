@@ -119,7 +119,7 @@
 #define AP_SSID "BambuTagger"
 #define AP_PASS "bambu1234"
 
-#define FIRMWARE_VERSION "1.6.1"          // bumped by release workflow tag
+#define FIRMWARE_VERSION "1.7.2"          // bumped by release workflow tag
 #define OTA_REPO         "VID-PRO/BambuTagger"
 
 #define GITHUB_API_HOST "api.github.com"
