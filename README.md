@@ -85,12 +85,38 @@ Schematics are here [schematics](/schematics/schematics.png)
 | Setting | Value |
 |---------|-------|
 | Board | **ESP32 Dev Module** |
-| Partition Scheme | **Default 4MB with ffat** |
+| Partition Scheme | **Custom** (select `partitions_4mb_custom.csv` — see below) |
 | Flash Size | 4 MB |
 | Upload Speed | 921600 |
 | Monitor Speed | **115200** |
 
 > The sketch calls `FFat.begin(true)` — the `true` flag formats the FAT partition automatically on first boot if it is blank.
+
+#### Custom partition table
+
+BambuTagger ships with `partitions_4mb_custom.csv` in the sketch folder.  
+Copy it into the Arduino ESP32 core's partitions directory:
+
+```
+# macOS / Linux
+cp partitions_4mb_custom.csv \
+   ~/Library/Arduino15/packages/esp32/hardware/esp32/<version>/tools/partitions/
+# Windows
+copy partitions_4mb_custom.csv ^
+   %LOCALAPPDATA%\Arduino15\packages\esp32\hardware\esp32\<version>\tools\partitions\
+```
+
+Then select **Tools → Partition Scheme → partitions_4mb_custom**.
+
+| Partition | Offset | Size | Notes |
+|-----------|--------|------|-------|
+| nvs | `0x9000` | 20 KB | WiFi creds, GitHub token |
+| otadata | `0xE000` | 8 KB | OTA slot bookkeeping |
+| **app0** | `0x10000` | **1408 KB** | +128 KB vs default\_ffat |
+| **app1** | `0x170000` | **1408 KB** | +128 KB vs default\_ffat |
+| **ffat** | `0x2D0000` | **1152 KB** | Dump file storage |
+
+> The GitHub Actions release workflow installs and applies this CSV automatically — no manual step needed for CI builds.
 
 ---
 
@@ -629,8 +655,9 @@ To disable all debug output and save flash/RAM:
 1. Install the Arduino IDE (≥ 2.x) and the [ESP32 board package](https://docs.espressif.com/projects/arduino-esp32/en/latest/installing.html).
 2. Install all libraries listed above via **Sketch → Include Library → Manage Libraries**.
 3. Open `BambuTagger.ino`.
-4. Select **Tools → Board → ESP32 Dev Module** and set the partition scheme to **Default 4MB with ffat**.
-5. Click **Upload**.
+4. Copy `partitions_4mb_custom.csv` into the ESP32 core's `tools/partitions/` directory (see [Custom partition table](#custom-partition-table) above).
+5. Select **Tools → Board → ESP32 Dev Module** and set the partition scheme to **partitions_4mb_custom**.
+6. Click **Upload**.
 6. Open **Tools → Serial Monitor** at 115200 baud to watch the boot log.
 
 > On first boot the FAT partition will be formatted automatically (`FFat.begin(true)`).
@@ -644,7 +671,8 @@ A workflow file at `.github/workflows/release.yml` builds and publishes releases
 | Event | Compile | Release created |
 |-------|---------|----------------|
 | Push / PR to `main` | ✅ (CI check) | ❌ |
-| Push a `v*` tag | ✅ | ✅ |
+| Push a `v*` tag (e.g. `v1.7.0`) | ✅ | ✅ |
+| Push a bare version tag (e.g. `1.7.0`) | ✅ | ✅ |
 | Manual workflow dispatch | ✅ | only if tagged commit |
 
 #### Creating a release
@@ -661,7 +689,7 @@ git tag v1.0.1
 git push origin v1.0.1
 ```
 
-The workflow compiles the sketch on **ESP32 Arduino core 2.0.17** (partition scheme `default_ffat`), merges all binary parts with `esptool.py merge_bin`, and attaches four files to the GitHub release:
+The workflow compiles the sketch on **ESP32 Arduino core 2.0.17** using the custom partition table (`partitions_4mb_custom.csv`, app = 1408 KB, ffat = 1152 KB), merges all binary parts with `esptool.py merge_bin`, and attaches four files to the GitHub release:
 
 | File | Flash address | Description |
 |------|--------------|-------------|

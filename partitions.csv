@@ -1,0 +1,20 @@
+# BambuTagger — custom 4 MB partition table
+# app0 / app1 enlarged by 128 KB vs default_ffat → 1408 KB each
+# ffat reduced from 1408 KB to 1152 KB to compensate
+# All app partition start addresses kept on 64 KB boundaries (required by ESP32 MMU)
+#
+# Flash map:
+#   0x000000 – 0x008FFF  bootloader (not in table)
+#   0x009000 – 0x00DFFF  nvs      (20 KB)
+#   0x00E000 – 0x00FFFF  otadata  ( 8 KB)
+#   0x010000 – 0x16FFFF  app0     (1408 KB)
+#   0x170000 – 0x2CFFFF  app1     (1408 KB)
+#   0x2D0000 – 0x3EFFFF  ffat     (1152 KB)
+#   0x3F0000 – 0x3FFFFF  (64 KB unused / reserved)
+#
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x5000,
+otadata,  data, ota,     0xe000,   0x2000,
+app0,     app,  ota_0,   0x10000,  0x160000,
+app1,     app,  ota_1,   0x170000, 0x160000,
+ffat,     data, fat,     0x2D0000, 0x120000,
