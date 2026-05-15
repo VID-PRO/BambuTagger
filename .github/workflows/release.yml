@@ -69,7 +69,7 @@ jobs:
       - name: Install custom partition table
         run: |
           PARTS_DIR=$(find ~/.arduino15/packages/esp32/hardware/esp32 -maxdepth 2 -name "partitions" -type d | head -1)
-          cp "${{ github.workspace }}/BambuTagger/partitions_4mb_custom.csv" "$PARTS_DIR/"
+          cp "${{ github.workspace }}/BambuTagger/partitions.csv" "$PARTS_DIR/"
           echo "Installed partition table to $PARTS_DIR"
 
       # ── 7. Compile sketch ────────────────────────────────────
