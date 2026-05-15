@@ -119,7 +119,7 @@
 #define AP_SSID "BambuTagger"
 #define AP_PASS "bambu1234"
 
-#define FIRMWARE_VERSION "1.6.2"          // bumped by release workflow tag
+#define FIRMWARE_VERSION "1.6.1"          // bumped by release workflow tag
 #define OTA_REPO         "VID-PRO/BambuTagger"
 
 #define GITHUB_API_HOST "api.github.com"
@@ -2600,12 +2600,6 @@ static void bmSkipBytes(WiFiClient* s, int n) {
   }
 }
 
-void bmCacheInvalidate() {
-  bmCL0n = 0; bmCL1n = 0; bmCL2n = 0;
-  bmCacheValid = false;
-  DBGLN("[BM] Cache invalidated");
-}
-
 // Returns URL of today's (or recent) bambuman.ee daily ZIP
 String bmFindZipUrl() {
   struct tm t;
@@ -2631,6 +2625,12 @@ String bmFindZipUrl() {
     if (code == 200) return String(url);
   }
   return "";
+}
+
+void bmCacheInvalidate() {
+  bmCL0n = 0; bmCL1n = 0; bmCL2n = 0;
+  bmCacheValid = false;
+  DBGLN("[BM] Cache invalidated");
 }
 
 // POST /api/bm/sync – download ZIP central directory, build /BM/catalog.json
@@ -3204,15 +3204,30 @@ void apiOtaCheck() {
 // POST /api/ota/update  — download and flash, then reboot
 void apiOtaUpdate() {
   DBGLN("[HTTP]  POST /api/ota/update");
+
+  // ── OLED: checking ──────────────────────────────────────────
+  otaDrawProgress(0, "Web: checking...");
+
   OtaRelease rel = ghGetLatestRelease();
   if (!rel.ok) {
+    // OLED: show failure hint
+    String hint = rel.tag.length() ? rel.tag : "See serial log";
+    showStatus(("OTA Web\n\nCheck failed!\n" + hint).c_str());
     httpServer.send(503, "application/json",
                     "{\"ok\":false,\"error\":\"Could not fetch release info\"}");
     return;
   }
 
-  String err = otaFlash(rel, false);
+  // ── OLED: show target version and start progress bar ────────
+  String label = "Web: v" + rel.tag;
+  otaDrawProgress(0, label.c_str());
+  ledSet(255, 200, 0);
+
+  String err = otaFlash(rel, true);   // true → OLED progress during flash
   if (!err.isEmpty()) {
+    // OLED: show error (stays visible until next user action)
+    showStatus(("OTA Failed!\n" + err).c_str());
+    ledFlash(255, 0, 0, 3);
     DynamicJsonDocument doc(256);
     doc["ok"] = false; doc["error"] = err;
     String out; serializeJson(doc, out);
@@ -3220,9 +3235,12 @@ void apiOtaUpdate() {
     return;
   }
 
+  // ── OLED: success ────────────────────────────────────────────
+  otaDrawProgress(100, "Done! Rebooting");
+  ledFlash(0, 255, 0, 3);
   httpServer.send(200, "application/json", "{\"ok\":true}");
   DBGLN("[OTA]  Web-triggered update complete — rebooting");
-  delay(500);
+  delay(1500);
   ESP.restart();
 }
 

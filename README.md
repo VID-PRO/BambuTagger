@@ -21,6 +21,7 @@ Designed around the MIFARE Classic 1K tags embedded in Bambu Lab spools, with fu
 | **OTA firmware update** | Check for and flash the latest release from GitHub — both from the OLED menu and the web UI — with live progress bar and automatic reboot |
 | **Firmware version tracking** | `FIRMWARE_VERSION` define keeps the OLED menu, web UI, and OTA check in sync |
 | **BambuMan OLED browser** | Browse the bambuman.ee catalog by Material → Type → Color → UID on the OLED; sync the catalog directly from the OLED without a PC |
+| **BambuMan navigation cache** | First three hierarchy levels (Material / Type / Color) are pre-loaded into RAM on first browse — navigation is instant; cache auto-rebuilds after any catalog sync |
 | **BambuMan web search** | Sync catalog, filter by material/color, fetch & write from web UI |
 | **File upload** | Drag-and-drop or file-picker upload of `.bin` dumps to FAT |
 | **Directory structure** | Both GitHub and BambuMan downloads use the same `/{MAT}/{TYPE}/{COLOR}/{UID}.bin` tree on FAT — no separate `/BM/` folder for bin files |
@@ -339,6 +340,22 @@ On success the OLED shows **"Done! N entries"** and the LED flashes green — cl
 
 > **No decompression** — only the ZIP file listing is fetched, not the full archive.  The Range request is typically 400–500 KB regardless of how many dump files are in the ZIP.
 
+#### Navigation cache
+
+To eliminate per-keypress SD reads at the top three levels, BambuTagger pre-loads the entire Material / Type / Color index into RAM the first time you enter the BambuMan browser:
+
+| Cache level | Contents | Max slots |
+|-------------|----------|-----------|
+| L0 | Distinct materials | 24 |
+| L1 | Distinct mat + type combos | 96 |
+| L2 | Distinct mat + type + color combos | 128 |
+
+**Total RAM footprint:** ~19 KB (statically allocated).
+
+- **Built lazily** — single-pass read of `/BM/catalog.json` on first open; takes 1–3 s. Debug output: `[BM] Cache built: L0=8  L1=22  L2=97`
+- **Level 3 (UIDs)** — still streamed from the catalog file; all higher levels are served from RAM.
+- **Auto-invalidated** after every catalog sync (OLED **> Sync Catalog** or web UI **🔄 Sync Catalog**) — the updated catalog is reflected on next browse entry.
+
 #### Error states
 
 | Message | Meaning |
@@ -455,7 +472,15 @@ Check for and apply firmware updates without connecting a USB cable.
 - The **Check** step is read-only and safe to run at any time.
 - The **Flash** step asks for confirmation before downloading.
 - If the device reboots mid-response (successful flash), the JS detects the dropped connection and shows "Device rebooting… reconnect in a few seconds."
-- While flashing, the OLED shows a live progress bar and the LED pulses cyan.
+- **OLED mirrors the update progress in real time** — the same display used by the OLED-native OTA flow:
+
+| Phase | OLED | LED |
+|-------|------|-----|
+| Fetching release info | `OTA Firmware` / `Web: checking...` + 0 % bar | — |
+| Downloading & flashing | `OTA Firmware` / `Web: vX.Y.Z` + live progress bar | 🟡 amber |
+| Success | `OTA Firmware` / `Done! Rebooting` + 100 % bar | 🟢 3 × flash |
+| Check failed | `OTA Web` / `Check failed!` / hint | — |
+| Flash error | `OTA Failed!` / error text | 🔴 3 × flash |
 
 ### Tab 6 — Config
 - Shows current WiFi mode, SSID, and IP address.
