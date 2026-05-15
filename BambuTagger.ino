@@ -119,7 +119,7 @@
 #define AP_SSID "BambuTagger"
 #define AP_PASS "bambu1234"
 
-#define FIRMWARE_VERSION "1.7.3"          // bumped by release workflow tag
+#define FIRMWARE_VERSION "1.7.4"          // bumped by release workflow tag
 #define OTA_REPO         "VID-PRO/BambuTagger"
 
 #define GITHUB_API_HOST "api.github.com"
@@ -198,6 +198,12 @@ const unsigned char splash[] PROGMEM = {
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x0c, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4c, 0x4c, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x78, 0x78, 0x00, 0x00, 0x00, 0x00
+};
+
+// 'favicon10', 10x10px
+const unsigned char favicon [] PROGMEM = {
+	0xe1, 0xc0, 0xde, 0xc0, 0xa1, 0x40, 0x52, 0x80, 0x6d, 0x80,
+  0x73, 0x80, 0x73, 0x80, 0xad, 0x40, 0xde, 0xc0, 0xe1, 0xc0
 };
 
 // ──────────────────────────────────────────────────────────────
@@ -942,11 +948,11 @@ static void oledText(int x, int y, int sz,
 
 static void oledTitle(const char* title) {
   oled.setTextSize(1);
-  oled.fillRect(0, 0, 128, 10, SH110X_WHITE);
+  oled.drawBitmap(1, 0, favicon, 10, 10, 1);
+  oled.fillRect(11, 0, 118, 10, SH110X_WHITE);
   oled.setTextColor(SH110X_BLACK);
-  oled.setCursor(2, 1);
+  oled.setCursor(16, 1);
   oled.print(title);
-  //oled.drawFastHLine(0, 9, 128, SH110X_WHITE);
   oled.setTextColor(SH110X_WHITE);
 }
 
@@ -3110,6 +3116,9 @@ void enterMainMenu() {
   drawMenu();
 }
 
+// forward declaration (defined below with apiOtaCheck)
+static bool semverGt(const String& a, const String& b);
+
 // OLED-driven blocking OTA flow
 void processOtaUpdate() {
   if (WiFi.status() != WL_CONNECTED) {
@@ -3135,8 +3144,13 @@ void processOtaUpdate() {
 
   // 2/3 — Version compare (rel.tag is already stripped of leading 'v')
   String current = FIRMWARE_VERSION;  // bare e.g. "1.6.0"
-  if (rel.tag == current) {
-    showStatus(("OTA Update\n\nUp to date! v" + current + "\n\nClick to return.").c_str());
+  if (!semverGt(current, rel.tag)) {
+    // latest is equal to or older than running firmware
+    String msg = (rel.tag == current)
+      ? ("OTA Update\n\nUp to date!\nv" + current + "\n\nClick to return.")
+      : ("OTA Update\n\nNo newer release\nLatest: v" + rel.tag +
+         "\nRunning: v" + current + "\n\nClick to return.");
+    showStatus(msg.c_str());
     ledFlash(0, 255, 0, 2);
     appState = S_WIFI_INFO;
     return;
@@ -5126,7 +5140,6 @@ void setup() {
   // oled.setTextSize(1);
   // oled.setCursor(18, 50); oled.print("Initialising...");
   oled.drawBitmap(0, 0, splash, 128, 64, 1);
-  oled.display();
   oled.display();
   delay(2000);
 
