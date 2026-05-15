@@ -83,7 +83,7 @@ jobs:
             --build-property "upload.maximum_size=1441792" \
             --output-dir "${{ github.workspace }}/build" \
             --warnings none \
-            "${{ github.workspace }}/BambuTagger/BambuTagger.ino"
+            "${{ github.workspace }}/BambuTagger.ino"
 
       # ── 8. Build a merged flashable binary ───────────────────
       # Combines bootloader + partition table + app into a single
@@ -92,7 +92,7 @@ jobs:
         run: |
           pip install esptool --quiet
           # Locate the ESP32 build artefacts
-          BOOT=$(find ~/.arduino15 -name "bootloader_dio_80m.bin" | head -1)
+          BOOT="${{ github.workspace }}/build/BambuTagger.ino.bootloader.bin"
           PART="${{ github.workspace }}/build/BambuTagger.ino.partitions.bin"
           APP="${{ github.workspace }}/build/BambuTagger.ino.bin"
           MERGED="${{ github.workspace }}/build/BambuTagger_merged.bin"
