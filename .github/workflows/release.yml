@@ -63,38 +63,47 @@ jobs:
           arduino-cli lib install "Adafruit NeoPixel"
           arduino-cli lib install "ArduinoJson"
 
-      # ── 6. Compile sketch ────────────────────────────────────
-      # Board options:
-      #   PartitionScheme=default_ffat  → "Default 4MB with ffat"
-      #   (matches the partition scheme used by the sketch)
+      # ── 6. Install custom partition table ────────────────────
+      # Copies partitions_4mb_custom.csv into the ESP32 core's
+      # partitions directory so arduino-cli can resolve it by name.
+      - name: Install custom partition table
+        run: |
+          PARTS_DIR=$(find ~/.arduino15/packages/esp32/hardware/esp32 -maxdepth 2 -name "partitions" -type d | head -1)
+          cp "${{ github.workspace }}/BambuTagger/partitions_4mb_custom.csv" "$PARTS_DIR/"
+          echo "Installed partition table to $PARTS_DIR"
+
+      # ── 7. Compile sketch ────────────────────────────────────
+      # Custom partition layout: app0/app1 = 1408 KB each (+128 KB vs default_ffat)
+      # ffat = 1152 KB.  upload.maximum_size must match the new app partition size.
       - name: Compile sketch
         run: |
           arduino-cli compile \
             --fqbn "esp32:esp32:esp32" \
-            --build-property PartitionScheme=default_ffat \
+            --build-property "build.partitions=partitions_4mb_custom" \
+            --build-property "upload.maximum_size=1441792" \
             --output-dir "${{ github.workspace }}/build" \
             --warnings none \
-            "${{ github.workspace }}/BambuTagger.ino"
+            "${{ github.workspace }}/BambuTagger/BambuTagger.ino"
 
-      # ── 7. Build a merged flashable binary ───────────────────
+      # ── 8. Build a merged flashable binary ───────────────────
       # Combines bootloader + partition table + app into a single
       # .bin that can be flashed at address 0x00 with esptool.
       - name: Create merged binary
         run: |
           pip install esptool --quiet
           # Locate the ESP32 build artefacts
-          BOOT="${{ github.workspace }}/build/BambuTagger.ino.bootloader.bin"
+          BOOT=$(find ~/.arduino15 -name "bootloader_dio_80m.bin" | head -1)
           PART="${{ github.workspace }}/build/BambuTagger.ino.partitions.bin"
           APP="${{ github.workspace }}/build/BambuTagger.ino.bin"
           MERGED="${{ github.workspace }}/build/BambuTagger_merged.bin"
 
-          esptool \
+          esptool.py \
             --chip esp32 \
-            merge-bin \
+            merge_bin \
             --output "$MERGED" \
-            --flash-mode dio \
-            --flash-freq 80m \
-            --flash-size 4MB \
+            --flash_mode dio \
+            --flash_freq 80m \
+            --flash_size 4MB \
             0x1000  "$BOOT" \
             0x8000  "$PART" \
             0xe000  ~/.arduino15/packages/esp32/hardware/esp32/2.0.17/tools/partitions/boot_app0.bin \
@@ -103,7 +112,7 @@ jobs:
           echo "=== Build artefacts ==="
           ls -lh "${{ github.workspace }}/build/"
 
-      # ── 8. Upload artefacts (available for every build) ──────
+      # ── 9. Upload artefacts (available for every build) ──────
       - name: Upload firmware artefacts
         uses: actions/upload-artifact@v4
         with:
@@ -115,7 +124,7 @@ jobs:
             build/BambuTagger.ino.partitions.bin
             build/BambuTagger_merged.bin
 
-      # ── 9. Create GitHub Release (tags only) ─────────────────
+      # ── 10. Create GitHub Release (tags only) ────────────────
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
@@ -145,6 +154,6 @@ jobs:
               0x10000 BambuTagger.ino.bin
             ```
 
-            > **Partition scheme:** Default 4MB with FFat  
+            > **Partition scheme:** Custom 4 MB — app0/app1 = 1408 KB, ffat = 1152 KB  
             > **Board:** ESP32 Dev Module  
             > **Core:** esp32:esp32 2.0.17
