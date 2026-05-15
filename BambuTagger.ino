@@ -119,7 +119,7 @@
 #define AP_SSID "BambuTagger"
 #define AP_PASS "bambu1234"
 
-#define FIRMWARE_VERSION "1.7.0"          // bumped by release workflow tag
+#define FIRMWARE_VERSION "1.6.2"          // bumped by release workflow tag
 #define OTA_REPO         "VID-PRO/BambuTagger"
 
 #define GITHUB_API_HOST "api.github.com"
@@ -1170,6 +1170,25 @@ static int bmCatLevel = 0;  // 0=material, 1=type, 2=color, 3=uid
 static char bmCatMat[32] = "";
 static char bmCatType[32] = "";
 static char bmCatColor[32] = "";
+
+// ── BambuMan 3-level navigation cache (Mat / Type / Color) ────
+// Built once from catalog.json on first browse; invalidated after sync.
+// Levels 0–2 are served from RAM; level 3 (UIDs) always streams the file.
+#define BM_CACHE_L0  24    // max distinct materials
+#define BM_CACHE_L1  96    // max distinct mat+type combos
+#define BM_CACHE_L2  128   // max distinct mat+type+color combos
+
+struct BmCacheL0E { char mat[32]; };
+struct BmCacheL1E { char mat[32]; char type[32]; };
+struct BmCacheL2E { char mat[32]; char type[32]; char color[32]; };
+
+static BmCacheL0E bmCL0[BM_CACHE_L0];
+static int        bmCL0n = 0;
+static BmCacheL1E bmCL1[BM_CACHE_L1];
+static int        bmCL1n = 0;
+static BmCacheL2E bmCL2[BM_CACHE_L2];
+static int        bmCL2n = 0;
+static bool       bmCacheValid = false;
 
 // Total visible rows (always adds 1 nav row: "<< MENU" at root, "< BACK" in sub-dirs)
 inline int fatTotalRows() {
@@ -2581,6 +2600,12 @@ static void bmSkipBytes(WiFiClient* s, int n) {
   }
 }
 
+void bmCacheInvalidate() {
+  bmCL0n = 0; bmCL1n = 0; bmCL2n = 0;
+  bmCacheValid = false;
+  DBGLN("[BM] Cache invalidated");
+}
+
 // Returns URL of today's (or recent) bambuman.ee daily ZIP
 String bmFindZipUrl() {
   struct tm t;
@@ -2772,6 +2797,7 @@ void apiBmSync() {
     outF.close();
     hc.end();
     DBGF("[BM] Catalog: %d entries\n", count);
+    bmCacheInvalidate();   // force rebuild on next OLED browse
     String resp = "{\"ok\":true,\"count\":" + String(count) + "}";
     httpServer.send(200, "application/json", resp);
   }
@@ -3900,79 +3926,165 @@ void enterWifiInfo() {
 //  BambuMan catalog OLED browser  (4-level: Mat→Type→Color→UID)
 // ──────────────────────────────────────────────────────────────
 
-// Stream-parse /BM/catalog.json and populate bmCatEntries[] for current level.
-// Levels: 0=material, 1=type, 2=color, 3=uid.
-// Returns true even on empty result (catalog exists), false if file missing.
-bool bmCatLoadLevel() {
-  bmCatCount = 0;
+// ── BambuMan cache helpers ─────────────────────────────────────────────────
+
+// Single-pass stream build of all 3 navigation levels from /BM/catalog.json.
+// Called automatically on first OLED browse; returns false if file missing.
+bool bmCacheBuild() {
+  if (bmCacheValid) return true;
+  bmCL0n = 0; bmCL1n = 0; bmCL2n = 0;
+
   File f = FFat.open("/BM/catalog.json", "r");
   if (!f) return false;
 
-  // Skip to opening '['
-  while (f.available()) {
-    if (f.read() == '[') break;
-  }
+  while (f.available()) if (f.read() == '[') break;
 
-  char seen[BM_MAX_ENTRIES][32];
-  int seenCount = 0;
   StaticJsonDocument<256> doc;
   char obj[192];
 
-  while (f.available() && bmCatCount < BM_MAX_ENTRIES) {
-    // Skip to next '{'
+  while (f.available()) {
     char c;
     do {
-      if (!f.available()) goto bmLoadDone;
+      if (!f.available()) goto bmBuildDone;
       c = f.read();
     } while (c != '{');
 
-    // Read object into buffer
     obj[0] = '{';
     int i = 1, depth = 1;
     while (f.available() && i < 190) {
       c = f.read();
       obj[i++] = c;
       if (c == '{') depth++;
-      else if (c == '}') {
-        depth--;
-        if (depth == 0) break;
-      }
+      else if (c == '}') { if (--depth == 0) break; }
     }
     obj[i] = '\0';
 
     doc.clear();
     if (deserializeJson(doc, obj)) continue;
 
-    const char* m = doc["m"] | "";
-    const char* t = doc["t"] | "";
+    const char* m  = doc["m"] | "";
+    const char* t  = doc["t"] | "";
     const char* co = doc["c"] | "";
-    const char* u = doc["u"] | "";
+    if (!m[0]) continue;
 
-    if (bmCatLevel >= 1 && strcmp(m, bmCatMat) != 0) continue;
-    if (bmCatLevel >= 2 && strcmp(t, bmCatType) != 0) continue;
-    if (bmCatLevel >= 3 && strcmp(co, bmCatColor) != 0) continue;
-
-    const char* val = (bmCatLevel == 0) ? m : (bmCatLevel == 1) ? t
-                                            : (bmCatLevel == 2) ? co
-                                                                : u;
-    if (!val || val[0] == '\0') continue;
-
-    // Deduplicate levels 0-2
-    if (bmCatLevel < 3) {
-      bool dup = false;
-      for (int j = 0; j < seenCount; j++)
-        if (strcmp(seen[j], val) == 0) {
-          dup = true;
-          break;
-        }
-      if (dup) continue;
-      if (seenCount < BM_MAX_ENTRIES)
-        strncpy(seen[seenCount++], val, 31);
+    // L0 – unique materials
+    {
+      bool found = false;
+      for (int j = 0; j < bmCL0n; j++)
+        if (strcmp(bmCL0[j].mat, m) == 0) { found = true; break; }
+      if (!found && bmCL0n < BM_CACHE_L0) {
+        strncpy(bmCL0[bmCL0n].mat, m, 31); bmCL0[bmCL0n].mat[31] = '\0';
+        bmCL0n++;
+      }
     }
+    // L1 – unique mat+type combos
+    {
+      bool found = false;
+      for (int j = 0; j < bmCL1n; j++)
+        if (strcmp(bmCL1[j].mat, m) == 0 && strcmp(bmCL1[j].type, t) == 0) { found = true; break; }
+      if (!found && bmCL1n < BM_CACHE_L1) {
+        strncpy(bmCL1[bmCL1n].mat,  m, 31); bmCL1[bmCL1n].mat[31]  = '\0';
+        strncpy(bmCL1[bmCL1n].type, t, 31); bmCL1[bmCL1n].type[31] = '\0';
+        bmCL1n++;
+      }
+    }
+    // L2 – unique mat+type+color combos
+    {
+      bool found = false;
+      for (int j = 0; j < bmCL2n; j++)
+        if (strcmp(bmCL2[j].mat, m) == 0 && strcmp(bmCL2[j].type, t) == 0
+            && strcmp(bmCL2[j].color, co) == 0) { found = true; break; }
+      if (!found && bmCL2n < BM_CACHE_L2) {
+        strncpy(bmCL2[bmCL2n].mat,   m,  31); bmCL2[bmCL2n].mat[31]   = '\0';
+        strncpy(bmCL2[bmCL2n].type,  t,  31); bmCL2[bmCL2n].type[31]  = '\0';
+        strncpy(bmCL2[bmCL2n].color, co, 31); bmCL2[bmCL2n].color[31] = '\0';
+        bmCL2n++;
+      }
+    }
+    yield();
+  }
 
-    strncpy(bmCatEntries[bmCatCount].label, val, 31);
-    bmCatEntries[bmCatCount].label[31] = '\0';
-    bmCatCount++;
+bmBuildDone:
+  f.close();
+  bmCacheValid = true;
+  DBGF("[BM] Cache built: L0=%d  L1=%d  L2=%d\n", bmCL0n, bmCL1n, bmCL2n);
+  return true;
+}
+
+// Populate bmCatEntries[] for the current browse level.
+// Levels 0–2: served from RAM cache (fast, no SD read).
+// Level 3 (UIDs): stream-parsed from catalog.json (list is unbounded).
+// Returns false only if /BM/catalog.json is missing entirely.
+bool bmCatLoadLevel() {
+  bmCatCount = 0;
+
+  // ── Levels 0–2: cache path ────────────────────────────────
+  if (bmCatLevel < 3) {
+    if (!bmCacheBuild()) return false;   // catalog missing
+
+    if (bmCatLevel == 0) {
+      for (int i = 0; i < bmCL0n && bmCatCount < BM_MAX_ENTRIES; i++) {
+        strncpy(bmCatEntries[bmCatCount].label, bmCL0[i].mat, 31);
+        bmCatEntries[bmCatCount++].label[31] = '\0';
+      }
+    } else if (bmCatLevel == 1) {
+      for (int i = 0; i < bmCL1n && bmCatCount < BM_MAX_ENTRIES; i++) {
+        if (strcmp(bmCL1[i].mat, bmCatMat) != 0) continue;
+        strncpy(bmCatEntries[bmCatCount].label, bmCL1[i].type, 31);
+        bmCatEntries[bmCatCount++].label[31] = '\0';
+      }
+    } else {   // level 2
+      for (int i = 0; i < bmCL2n && bmCatCount < BM_MAX_ENTRIES; i++) {
+        if (strcmp(bmCL2[i].mat,  bmCatMat)  != 0) continue;
+        if (strcmp(bmCL2[i].type, bmCatType) != 0) continue;
+        strncpy(bmCatEntries[bmCatCount].label, bmCL2[i].color, 31);
+        bmCatEntries[bmCatCount++].label[31] = '\0';
+      }
+    }
+    return true;
+  }
+
+  // ── Level 3 (UIDs): stream-parse catalog.json ─────────────
+  File f = FFat.open("/BM/catalog.json", "r");
+  if (!f) return false;
+
+  while (f.available()) if (f.read() == '[') break;
+
+  StaticJsonDocument<256> doc;
+  char obj[192];
+
+  while (f.available() && bmCatCount < BM_MAX_ENTRIES) {
+    char c;
+    do {
+      if (!f.available()) goto bmLoadDone;
+      c = f.read();
+    } while (c != '{');
+
+    obj[0] = '{';
+    int i = 1, depth = 1;
+    while (f.available() && i < 190) {
+      c = f.read();
+      obj[i++] = c;
+      if (c == '{') depth++;
+      else if (c == '}') { if (--depth == 0) break; }
+    }
+    obj[i] = '\0';
+
+    doc.clear();
+    if (deserializeJson(doc, obj)) continue;
+
+    const char* m  = doc["m"] | "";
+    const char* t  = doc["t"] | "";
+    const char* co = doc["c"] | "";
+    const char* u  = doc["u"] | "";
+
+    if (strcmp(m,  bmCatMat)   != 0) continue;
+    if (strcmp(t,  bmCatType)  != 0) continue;
+    if (strcmp(co, bmCatColor) != 0) continue;
+    if (!u[0]) continue;
+
+    strncpy(bmCatEntries[bmCatCount].label, u, 31);
+    bmCatEntries[bmCatCount++].label[31] = '\0';
   }
 bmLoadDone:
   f.close();
@@ -4327,6 +4439,7 @@ void bmOledSyncCatalog() {
   }
 
   DBGF("[BM] OLED sync done: %d entries\n", count);
+  bmCacheInvalidate();   // force rebuild on next browse
 
   // Success screen
   ledFlash(0, 255, 0, 3);
