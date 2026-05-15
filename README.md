@@ -378,7 +378,7 @@ Step 1 — Checking…          Step 2a — Up to date          Step 2b — Upda
 │   [cyan LED]         │    │   [green flash]      │      │   New: v1.0.1        │
 │                      │    │                      │      │   [click]=FLASH      │
 └──────────────────────┘    └──────────────────────┘      │   [enc]=cancel  15 s │
-                                                           └──────────────────────┘
+                                                          └──────────────────────┘
 
 Step 3 — Flashing                      Step 4 — Done
 ┌──────────────────────┐               ┌──────────────────────┐
@@ -400,7 +400,7 @@ The firmware flashed is `BambuTagger.ino.bin` from the latest GitHub release (ap
 | Result | LED | Message |
 |--------|-----|---------|
 | Already up to date | 🟢 green flash | `Up to date! vX.Y.Z` |
-| Flashing in progress | 🟡 Pulsing cyan → solid yellow | `Flashing... N%` |
+| Flashing in progress | 🔵 Pulsing cyan → 🟡 solid yellow | `Flashing... N%` |
 | Flash success | 🟢 green flash | `Done! Rebooting` |
 | Network error / GitHub error | 🔴 red flash | Error detail on OLED |
 | User cancelled | — | Returns to main menu |
