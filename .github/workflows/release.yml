@@ -66,11 +66,11 @@ jobs:
       # ── 6. Install custom partition table ────────────────────
       # Copies partitions_4mb_custom.csv into the ESP32 core's
       # partitions directory so arduino-cli can resolve it by name.
-      - name: Install custom partition table
-        run: |
-          PARTS_DIR=$(find ~/.arduino15/packages/esp32/hardware/esp32 -maxdepth 2 -name "partitions" -type d | head -1)
-          cp "${{ github.workspace }}/partitions.csv" "$PARTS_DIR/"
-          echo "Installed partition table to $PARTS_DIR"
+      #- name: Install custom partition table
+      #  run: |
+      #    PARTS_DIR=$(find ~/.arduino15/packages/esp32/hardware/esp32 -maxdepth 2 -name "partitions" -type d | head -1)
+      #    cp "${{ github.workspace }}/BambuTagger/partitions.csv" "$PARTS_DIR/"
+      #    echo "Installed partition table to $PARTS_DIR"
 
       # ── 7. Compile sketch ────────────────────────────────────
       # Custom partition layout: app0/app1 = 1408 KB each (+128 KB vs default_ffat)
@@ -79,7 +79,7 @@ jobs:
         run: |
           arduino-cli compile \
             --fqbn "esp32:esp32:esp32" \
-            --build-property "build.partitions=partitions_4mb_custom" \
+            --build-property "build.partitions=partitions.csv" \
             --build-property "upload.maximum_size=1441792" \
             --output-dir "${{ github.workspace }}/build" \
             --warnings none \
