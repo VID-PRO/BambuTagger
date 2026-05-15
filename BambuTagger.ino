@@ -1335,7 +1335,7 @@ input:focus,select:focus{outline:2px solid #1f6feb;border-color:#1f6feb}
   <div class="card">
     <h3>GitHub Library</h3>
     <p style="font-size:.85em;color:#8b949e;margin:0 0 12px">
-      Tags from <a href="" target="_blank"  style="color:#58a6ff">Bambu-Lab-RFID-Library</a>.<br>
+      900+ tags from <a href="" target="_blank"  style="color:#58a6ff">Bambu-Lab-RFID-Library</a>.<br>
     </p>
   </div>
   <div class="card">
@@ -3044,7 +3044,7 @@ void processOtaUpdate() {
   // 3/3 — Prompt
   String prompt = "Update!\nNow: v" + current +
                   "\nNew: v" + rel.tag +
-                  "\n\n[click]=FLASH\n[enc]=cancel";
+                  "\n[click]=FLASH\n[enc]=cancel";
   showStatus(prompt.c_str());
   ledSet(0, 80, 200);
 
@@ -3752,7 +3752,7 @@ void handleGhBrowseEncoder() {
       flatToTag(dumpBuf, &preview);
       char msg[128];
       snprintf(msg, sizeof(msg),
-               "GitHub OK!\n%.16s\n%.16s\n\n[click]=WRITE\n[enc]=cancel",
+               "GitHub OK!\n%.16s\n%.16s\n[click]=WRITE\n[enc]=cancel",
                preview.filamentType, preview.detailedType);
       showStatus(msg);
 
@@ -4468,7 +4468,7 @@ void handleBmCatEncoder() {
       flatToTag(dumpBuf, &preview);
       char msg[128];
       snprintf(msg, sizeof(msg),
-               "BambuMan OK!\n%.16s\n%.16s\n\n[click]=WRITE\n[enc]=cancel",
+               "BambuMan OK!\n%.16s\n%.16s\n[click]=WRITE\n[enc]=cancel",
                preview.filamentType, preview.detailedType);
       showStatus(msg);
       ledFlash(0, 255, 0, 2);
