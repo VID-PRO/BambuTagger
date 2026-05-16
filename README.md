@@ -87,7 +87,7 @@ Schematics are here [schematics](/schematics/schematics.png)
 | Setting | Value |
 |---------|-------|
 | Board | **ESP32 Dev Module** |
-| Partition Scheme | **Custom** (select `partitions_4mb_custom.csv` — see below) |
+| Partition Scheme | **Custom** (select `partitions.csv` — see below) |
 | Flash Size | 4 MB |
 | Upload Speed | 921600 |
 | Monitor Speed | **115200** |
@@ -101,11 +101,11 @@ Copy it into the Arduino ESP32 core's partitions directory:
 
 ```
 # macOS / Linux
-cp partitions_4mb_custom.csv \
-   ~/Library/Arduino15/packages/esp32/hardware/esp32/<version>/tools/partitions/
+cp partitions.csv \
+   ~/Library/Arduino15/packages/esp32/hardware/esp32/<version>/tools/partitions/partitions_4mb_custom.csv
 # Windows
-copy partitions_4mb_custom.csv ^
-   %LOCALAPPDATA%\Arduino15\packages\esp32\hardware\esp32\<version>\tools\partitions\
+copy partitions.csv ^
+   %LOCALAPPDATA%\Arduino15\packages\esp32\hardware\esp32\<version>\tools\partitions\partitions_4mb_custom.csv
 ```
 
 Then select **Tools → Partition Scheme → partitions_4mb_custom**.
